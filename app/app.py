@@ -33,6 +33,9 @@ sys.path = cleaned_path
 if str(ROOT_DIR) not in sys.path:
     sys.path.insert(0, str(ROOT_DIR))
 
+from load_env import load_project_env
+load_project_env()
+
 try:
     from app.services.instances import db
     from app.routes.dashboard import dashboard_bp
@@ -48,7 +51,12 @@ except ModuleNotFoundError:
 
 def create_app() -> Flask:
     """Application factory for the Flask server."""
-    app = Flask(__name__)
+    app_dir = Path(__file__).parent
+    app = Flask(
+        __name__,
+        template_folder=str(app_dir / "templates"),
+        static_folder=str(app_dir / "static"),
+    )
     
     # Simple configuration (harkened for security)
     import secrets
@@ -75,6 +83,11 @@ def create_app() -> Flask:
     @app.errorhandler(404)
     def page_not_found(e):
         return render_template("404.html", description=e.description), 404
+
+    @app.errorhandler(500)
+    def internal_error(e):
+        logger.exception("Internal server error")
+        return "Internal Server Error — check the terminal for the traceback.", 500
         
     # Inject active_page helper to templates
     @app.context_processor
@@ -92,5 +105,21 @@ def create_app() -> Flask:
 app = create_app()
 
 if __name__ == "__main__":
-    logger.info("Starting Flask dev server...")
-    app.run(host="0.0.0.0", port=5000, debug=os.environ.get("FLASK_DEBUG", "0") == "1")
+    import socket
+
+    port = int(os.environ.get("PORT", "5000"))
+    debug = os.environ.get("FLASK_DEBUG", "0") == "1"
+
+    # Skip in werkzeug reloader child (parent already holds the port)
+    if os.environ.get("WERKZEUG_RUN_MAIN") != "true":
+        with socket.socket(socket.AF_INET, socket.SOCK_STREAM) as sock:
+            if sock.connect_ex(("127.0.0.1", port)) == 0:
+                logger.error(
+                    "Port %s is already in use. Stop other Flask instances first "
+                    "(Ctrl+C in their terminal, or: Get-Process python | Stop-Process -Force).",
+                    port,
+                )
+                sys.exit(1)
+
+    logger.info("Starting Flask dev server on port %s...", port)
+    app.run(host="0.0.0.0", port=port, debug=debug, use_reloader=debug)

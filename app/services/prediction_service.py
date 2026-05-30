@@ -9,9 +9,15 @@ Maps distributor prefixes to Sri Lankan provinces:
   - DIST_NW_ -> North Western Province
 """
 
+import csv
 import logging
+from pathlib import Path
 from typing import List, Dict, Any, Tuple, Optional
 from app.services.db_service import DBService
+
+ROOT_DIR = Path(__file__).resolve().parent.parent.parent
+VALIDATION_REPORT = ROOT_DIR / "output" / "validation_report.csv"
+MODEL_BENCHMARK = ROOT_DIR / "output" / "model_benchmark_chronological.csv"
 
 logger = logging.getLogger("PredictionService")
 
@@ -230,3 +236,192 @@ class PredictionService:
         sizes = [r["Outlet_Size"] for r in self.db.execute_query("SELECT DISTINCT Outlet_Size FROM outlets WHERE Outlet_Size IS NOT NULL ORDER BY Outlet_Size")]
         dists = [r["primary_dist"] for r in self.db.execute_query("SELECT DISTINCT primary_dist FROM outlets WHERE primary_dist IS NOT NULL ORDER BY primary_dist")]
         return {"types": types, "sizes": sizes, "distributors": dists}
+
+    def get_top_opportunity_outlets(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Top outlets ranked by latent opportunity gap (predicted minus historical)."""
+        rows = self.db.execute_query(
+            """
+            SELECT Outlet_ID, primary_dist, Outlet_Type, Outlet_Size,
+                   hist_median_vol, Maximum_Monthly_Liters, censoring_score,
+                   (Maximum_Monthly_Liters - hist_median_vol) AS opportunity_gap
+            FROM outlets
+            ORDER BY opportunity_gap DESC
+            LIMIT ?
+            """,
+            (limit,),
+        )
+        for r in rows:
+            dist = r.get("primary_dist") or ""
+            prefix = "_".join(dist.split("_")[:2])
+            r["province"] = PROVINCE_MAP.get(prefix, "Other")
+            hist = r.get("hist_median_vol") or 0.0
+            pot = r.get("Maximum_Monthly_Liters") or 0.0
+            r["uplift_pct"] = round(((pot - hist) / hist * 100), 1) if hist > 0 else 0.0
+        return rows
+
+    def get_budget_recommendations(self, limit: int = 12) -> List[Dict[str, Any]]:
+        """Top trade-spend allocation recommendations from the optimizer."""
+        try:
+            rows = self.db.execute_query(
+                """
+                SELECT a.Outlet_ID, o.primary_dist, o.Outlet_Type,
+                       a.Trade_Spend_LKR, a.Expected_Lift, a.Revenue_ROI
+                FROM allocations a
+                JOIN outlets o ON o.Outlet_ID = a.Outlet_ID
+                WHERE a.Trade_Spend_LKR > 0
+                ORDER BY a.Expected_Lift DESC
+                LIMIT ?
+                """,
+                (limit,),
+            )
+            return rows
+        except Exception:
+            return []
+
+    def get_potential_distribution(self) -> List[Dict[str, Any]]:
+        """Histogram buckets for predicted monthly potential (liters)."""
+        rows = self.db.execute_query(
+            """
+            SELECT
+                CASE
+                    WHEN Maximum_Monthly_Liters < 300 THEN '0-300 L'
+                    WHEN Maximum_Monthly_Liters < 600 THEN '300-600 L'
+                    WHEN Maximum_Monthly_Liters < 900 THEN '600-900 L'
+                    WHEN Maximum_Monthly_Liters < 1200 THEN '900-1200 L'
+                    WHEN Maximum_Monthly_Liters < 1500 THEN '1200-1500 L'
+                    ELSE '1500+ L'
+                END AS bucket,
+                COUNT(*) AS outlets
+            FROM outlets
+            GROUP BY bucket
+            ORDER BY MIN(Maximum_Monthly_Liters)
+            """
+        )
+        return rows
+
+    def get_outlet_segmentation(self) -> List[Dict[str, Any]]:
+        """Aggregate potential and historical volume by outlet type."""
+        rows = self.db.execute_query(
+            """
+            SELECT Outlet_Type,
+                   COUNT(*) AS outlets,
+                   ROUND(SUM(hist_median_vol), 1) AS hist_volume,
+                   ROUND(SUM(Maximum_Monthly_Liters), 1) AS predicted_potential
+            FROM outlets
+            WHERE Outlet_Type IS NOT NULL
+            GROUP BY Outlet_Type
+            ORDER BY predicted_potential DESC
+            """
+        )
+        for r in rows:
+            r["opportunity_gap"] = round(
+                (r.get("predicted_potential") or 0) - (r.get("hist_volume") or 0), 1
+            )
+        return rows
+
+    def get_censoring_distribution(self) -> List[Dict[str, Any]]:
+        """Distribution of demand-censoring scores across the network."""
+        return self.db.execute_query(
+            """
+            SELECT
+                CASE
+                    WHEN censoring_score < 0.15 THEN 'Low (<0.15)'
+                    WHEN censoring_score < 0.30 THEN 'Moderate (0.15–0.30)'
+                    WHEN censoring_score < 0.50 THEN 'Elevated (0.30–0.50)'
+                    ELSE 'Severe (≥0.50)'
+                END AS band,
+                COUNT(*) AS outlets
+            FROM outlets
+            GROUP BY band
+            ORDER BY MIN(censoring_score)
+            """
+        )
+
+    def get_active_distributors_count(self) -> int:
+        return int(
+            self.db.execute_scalar(
+                "SELECT COUNT(DISTINCT primary_dist) FROM outlets WHERE primary_dist IS NOT NULL"
+            )
+            or 0
+        )
+
+    def get_executive_dashboard_kpis(self) -> Dict[str, Any]:
+        """KPI strip: outlets, avg potential, high-potential count, severe censoring %."""
+        row = self.db.execute_query(
+            """
+            SELECT
+                COUNT(*) AS total_outlets,
+                AVG(Maximum_Monthly_Liters) AS avg_potential,
+                SUM(CASE WHEN Maximum_Monthly_Liters >= 900 THEN 1 ELSE 0 END) AS high_potential_outlets,
+                SUM(CASE WHEN censoring_score >= 0.50 THEN 1 ELSE 0 END) AS severe_censored,
+                SUM(CASE WHEN censoring_score < 0.15 THEN 1 ELSE 0 END) AS low_risk_outlets
+            FROM outlets
+            """
+        )
+        if not row:
+            return {
+                "total_outlets": 0,
+                "avg_potential": 0.0,
+                "high_potential_outlets": 0,
+                "severe_censoring_pct": 0.0,
+                "low_risk_pct": 0.0,
+            }
+        r = row[0]
+        total = int(r.get("total_outlets") or 0)
+        severe = int(r.get("severe_censored") or 0)
+        low = int(r.get("low_risk_outlets") or 0)
+        return {
+            "total_outlets": total,
+            "avg_potential": round(float(r.get("avg_potential") or 0), 0),
+            "high_potential_outlets": int(r.get("high_potential_outlets") or 0),
+            "severe_censoring_pct": round((severe / total) * 100, 1) if total else 0.0,
+            "low_risk_pct": round((low / total) * 100, 1) if total else 0.0,
+        }
+
+    def get_avg_potential_uplift_pct(self) -> float:
+        row = self.db.execute_query(
+            """
+            SELECT AVG(
+                CASE WHEN hist_median_vol > 0
+                THEN (Maximum_Monthly_Liters - hist_median_vol) / hist_median_vol * 100
+                ELSE NULL END
+            ) AS avg_uplift
+            FROM outlets
+            """
+        )
+        return round((row[0]["avg_uplift"] or 0.0), 1) if row else 0.0
+
+    def get_model_performance_summary(self) -> Dict[str, Any]:
+        """Load walk-forward validation metrics for the primary heuristic model."""
+        summary = {
+            "model_name": "Heuristic Latent (Two-Regime)",
+            "mae": None,
+            "rmse": None,
+            "mape": None,
+            "r2": None,
+            "accuracy_pct": None,
+        }
+        if MODEL_BENCHMARK.exists():
+            with MODEL_BENCHMARK.open(newline="", encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    if "Heuristic" in row.get("Model", ""):
+                        summary["mae"] = round(float(row["MAE"]), 1)
+                        summary["rmse"] = round(float(row["RMSE"]), 1)
+                        summary["mape"] = round(float(row["MAPE_%"]), 1)
+                        summary["r2"] = round(float(row["R2"]), 3)
+                        summary["accuracy_pct"] = round(max(0.0, float(row["R2"]) * 100), 1)
+                        break
+        if summary["r2"] is None and VALIDATION_REPORT.exists():
+            r2_vals = []
+            with VALIDATION_REPORT.open(newline="", encoding="utf-8") as f:
+                for row in csv.DictReader(f):
+                    if row.get("Model") == "Heuristic_Latent_TwoRegime" and row.get("R2"):
+                        try:
+                            r2_vals.append(float(row["R2"]))
+                        except ValueError:
+                            pass
+            if r2_vals:
+                mean_r2 = sum(r2_vals) / len(r2_vals)
+                summary["r2"] = round(mean_r2, 3)
+                summary["accuracy_pct"] = round(max(0.0, mean_r2 * 100), 1)
+        return summary

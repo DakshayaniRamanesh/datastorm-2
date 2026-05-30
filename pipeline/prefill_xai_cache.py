@@ -15,6 +15,9 @@ ROOT = Path(__file__).parent.parent
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
+from load_env import load_project_env
+load_project_env()
+
 import pandas as pd
 
 from app.services.xai_service import XAIService, XAI_CACHE_PATH

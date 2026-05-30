@@ -29,6 +29,7 @@ from latent_heuristic import (
     finalize_latent_predictions,
     ensure_heuristic_inputs,
     HIGH_CENSORING_THRESHOLD,
+    PRIMARY_MODEL_NAME,
 )
 
 # Suppress warnings
@@ -470,7 +471,7 @@ def main():
                 fold_results.append({
                     "fold": fold_idx + 1,
                     "period": f"{yr}-{mo:02d}",
-                    "Model": "Heuristic_Latent (censoring>0.4)",
+                    "Model": f"{PRIMARY_MODEL_NAME} (censoring>0.4)",
                     **metrics_heur_hi,
                 })
             
@@ -495,7 +496,7 @@ def main():
             metrics_lgb = compute_metrics(val_combined["actual"].values, y_pred_lgb)
             
             # Record
-            fold_results.append({"fold": fold_idx+1, "period": f"{yr}-{mo:02d}", "Model": "Heuristic_Latent", **metrics_heur})
+            fold_results.append({"fold": fold_idx+1, "period": f"{yr}-{mo:02d}", "Model": PRIMARY_MODEL_NAME, **metrics_heur})
             fold_results.append({"fold": fold_idx+1, "period": f"{yr}-{mo:02d}", "Model": "Quantile Regressor", **metrics_hgb})
             fold_results.append({"fold": fold_idx+1, "period": f"{yr}-{mo:02d}", "Model": "LightGBM Quantile", **metrics_lgb})
             
@@ -522,7 +523,7 @@ def main():
     # 9. Plot Validation Curves
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
     
-    models = ["Heuristic_Latent", "Quantile Regressor", "LightGBM Quantile"]
+    models = [PRIMARY_MODEL_NAME, "Quantile Regressor", "LightGBM Quantile"]
     colors = ["#1f77b4", "#2ca02c", "#d62728"]
     
     for model, clr in zip(models, colors):

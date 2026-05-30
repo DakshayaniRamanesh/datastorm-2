@@ -139,8 +139,10 @@
             <!-- SHAP Explainability waterfall chart -->
             <div class="glass-panel p-4">
                 <div class="d-flex justify-content-between align-items-center mb-3">
-                    <h3 class="h6 mb-0 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Explainable AI: Local SHAP Feature Contributions</h3>
-                    <span class="badge-glass badge-blue" style="font-size: 10px;">LGBM Tree Explainer</span>
+                    <h3 class="h6 mb-0 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Latent Model: Component Attribution Waterfall</h3>
+                    {% if explanation and explanation.explanation_type %}
+                    <span class="badge-glass badge-blue ms-2" style="font-size: 10px;">{{ explanation.explanation_type | replace('_', ' ') }}</span>
+                    {% endif %}
                 </div>
                 <div id="shap-chart" style="height: 380px; width: 100%;"></div>
             </div>
@@ -156,10 +158,13 @@
             </div>
 
             <!-- Claude AI Senior Advisor -->
-            <div class="glass-panel p-4" style="background: linear-gradient(135deg, rgba(22, 29, 49, 0.8) 0%, rgba(94, 0, 249, 0.05) 100%);">
+            <div class="command-panel p-4" style="background:#f8fafc;">
                 <div class="d-flex align-items-center gap-2 mb-3">
                     <i class="fa-solid fa-brain text-purple" style="color: var(--color-purple); font-size: 20px;"></i>
-                    <h3 class="h6 mb-0 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Senior Sales Analytics Advisor Narrative</h3>
+                    <h3 class="h6 mb-0 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Senior Sales Analytics Advisor</h3>
+                    {% if narrative._source %}
+                    <span class="badge-glass badge-gold ms-2" style="font-size: 10px;">via {{ narrative._source | replace('_', ' ') }}</span>
+                    {% endif %}
                 </div>
                 
                 <div class="mb-3 p-3 rounded" style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-glass);">

@@ -87,6 +87,29 @@ python app/app.py
 
 Set `FLASK_DEBUG=1` for local dev only. Optional: `SECRET_KEY` env var for stable sessions.
 
+### Generative AI (XAI narratives)
+
+Set a Hugging Face token (recommended) or Anthropic key.
+
+**Option A — `.env` file (recommended):**
+
+```bash
+copy .env.example .env
+# Edit .env and set HF_TOKEN=hf_...
+pip install -r requirements.txt
+```
+
+**Option B — PowerShell session:**
+
+```powershell
+$env:HF_TOKEN = "hf_xxxxxxxx"
+$env:HF_MODEL_ID = "mistralai/Mistral-7B-Instruct-v0.3"
+# Optional fallback
+$env:ANTHROPIC_API_KEY = "sk-ant-..."
+```
+
+Priority: **HF_TOKEN → ANTHROPIC_API_KEY → rules engine**. Narratives are grounded on outlet KPIs + top attribution drivers.
+
 ### Pre-populate XAI cache (before demo)
 
 ```bash
@@ -104,6 +127,8 @@ Caches narratives for the top 200 outlets by potential (instant load in XAI tab)
 | `output/AI_ACES_predictions.csv` | Submission: `Outlet_ID`, `Maximum_Monthly_Liters` |
 | `output/ai_aces_budget_allocations.csv` | Western Province trade spend |
 | `output/validation_report.csv` | Walk-forward metrics (heuristic + ML benchmarks) |
+| `output/ceiling_validation_report.csv` | Ceiling-proxy metrics (rank corr, uplift, gap recovery) |
+| `pipeline/gold/heuristic_calibration.json` | Walk-forward calibrated uplift constants |
 | `output/model_benchmark_chronological.csv` | Short comparison from gold step |
 | `pipeline/gold/gold_features.parquet` | Full feature table |
 | `data/outlet_intelligence.db` | SQLite for web app |
@@ -112,17 +137,29 @@ Caches narratives for the top 200 outlets by potential (instant load in XAI tab)
 
 ## Latent demand heuristic (summary)
 
-Observed volume is treated as **supply-capped** (`V_obs ≤ D_true`). Potential is estimated as:
+Observed volume is treated as **supply-capped** (`V_obs ≤ D_true`). A **two-regime blend** applies:
+
+- **Low censoring** → conservative baseline (size × type × season × competition)
+- **High censoring** → full latent uncapping (peer gap + catchment + censoring uplift)
 
 ```
-Potential = jan_base × size_factor × type_factor × season_factor
-          × (1 + 0.40 × censoring_score)
-          × peer_efficiency_gap
-          × (1 + 0.15 × combined_catchment_score)
-          × competition_dampener
+w = smoothstep(censoring_score; start=0.15, full=0.45)
+baseline = jan_base × size × type × season × competition_dampener
+latent   = baseline × (1 + CENSORING_UPLIFT × cens) × peer_gap × (1 + CATCHMENT_UPLIFT × catch)
+potential_raw = (1 - w) × baseline + w × latent
 ```
+
+Constants `CENSORING_UPLIFT` and `CATCHMENT_UPLIFT` are recalibrated walk-forward against ceiling proxies (`max(hist_p90, hist_max, actual)`) via `pipeline/calibrate_heuristic.py` — not fitted to LightGBM.
 
 Then: floor vs history, cap at 5× `jan_base`, optional uplift for high censoring (`> 0.40`).
+
+### Ceiling validation (Priority 1)
+
+```bash
+python pipeline/08_ceiling_validation.py
+```
+
+Reports rank correlation to ceiling proxies, uplift–censoring monotonicity, and gap recovery vs LightGBM benchmark → `output/ceiling_validation_report.csv`.
 
 See `pipeline/latent_heuristic.py` for constants and implementation.
 

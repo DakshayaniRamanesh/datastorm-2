@@ -1,8 +1,11 @@
 """
 DataStorm 2026 - Primary Latent Demand Heuristic (Option A)
 ==========================================================
-Interpretable multiplicative model for maximum monthly potential under
+Two-regime interpretable model for maximum monthly potential under
 left-censored (supply-capped) observed sales.
+
+  - Low censoring  -> conservative baseline (size/type/season only)
+  - High censoring -> full latent uncapping (peer gap + catchment + censoring uplift)
 
 Production submissions use this module. ML quantile models are benchmarks only.
 """
@@ -12,16 +15,21 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
-# Uplift weights (documented for judges / paper)
-CENSORING_UPLIFT = 1.5000
-CATCHMENT_UPLIFT = 0.2466
+# Uplift weights — recalibrate via pipeline/calibrate_heuristic.py (walk-forward ceiling targets)
+CENSORING_UPLIFT = 1.2997
+CATCHMENT_UPLIFT = 1.9995
+
+# Two-regime blend: censoring_score in [0, BLEND_START] -> baseline; >= BLEND_FULL -> full latent
+REGIME_BLEND_START = 0.15
+REGIME_BLEND_FULL = 0.45
+
 HIGH_CENSORING_THRESHOLD = 0.40
 HIGH_CENSORING_CALIBRATION_SLOPE = 0.33
 MAX_POTENTIAL_MULTIPLIER = 5.0
 MIN_PREDICTION_LITERS = 1.0
 MIN_FLOOR_VS_MEDIAN_RATIO = 0.05
 
-PRIMARY_MODEL_NAME = "Heuristic_Latent"
+PRIMARY_MODEL_NAME = "Heuristic_Latent_TwoRegime"
 
 
 def ensure_heuristic_inputs(df: pd.DataFrame) -> pd.DataFrame:
@@ -63,19 +71,57 @@ def ensure_heuristic_inputs(df: pd.DataFrame) -> pd.DataFrame:
     return out
 
 
-def compute_heuristic_potential(df: pd.DataFrame) -> np.ndarray:
-    """Core latent-demand formula (multiplicative uncapping)."""
+def censoring_regime_weight(censoring: np.ndarray) -> np.ndarray:
+    """Smooth blend weight w in [0, 1]: 0 = baseline, 1 = full latent uncapping."""
+    span = REGIME_BLEND_FULL - REGIME_BLEND_START
+    t = (np.asarray(censoring, dtype=float) - REGIME_BLEND_START) / (span + 1e-9)
+    return np.clip(t, 0.0, 1.0)
+
+
+def compute_baseline_potential(df: pd.DataFrame) -> np.ndarray:
+    """Conservative potential for unconstrained outlets (no uncapping terms)."""
     d = ensure_heuristic_inputs(df)
     return (
         d["jan_base"].values
         * d["size_factor"].values
         * d["type_factor"].values
         * d["target_season_factor"].values
-        * (1.0 + d["censoring_score"].values * CENSORING_UPLIFT)
-        * d["peer_efficiency_gap"].values
-        * (1.0 + d["combined_catchment_score"].values * CATCHMENT_UPLIFT)
         * d["competition_dampener"].values
     )
+
+
+def compute_latent_core(
+    df: pd.DataFrame,
+    censoring_uplift: float | None = None,
+    catchment_uplift: float | None = None,
+) -> np.ndarray:
+    """Full latent uncapping formula (supply-cap aware)."""
+    d = ensure_heuristic_inputs(df)
+    alpha = CENSORING_UPLIFT if censoring_uplift is None else censoring_uplift
+    gamma = CATCHMENT_UPLIFT if catchment_uplift is None else catchment_uplift
+    return (
+        d["jan_base"].values
+        * d["size_factor"].values
+        * d["type_factor"].values
+        * d["target_season_factor"].values
+        * (1.0 + d["censoring_score"].values * alpha)
+        * d["peer_efficiency_gap"].values
+        * (1.0 + d["combined_catchment_score"].values * gamma)
+        * d["competition_dampener"].values
+    )
+
+
+def compute_heuristic_potential(
+    df: pd.DataFrame,
+    censoring_uplift: float | None = None,
+    catchment_uplift: float | None = None,
+) -> np.ndarray:
+    """Two-regime blend: (1-w)*baseline + w*latent_core before finalize."""
+    d = ensure_heuristic_inputs(df)
+    baseline = compute_baseline_potential(d)
+    latent = compute_latent_core(d, censoring_uplift, catchment_uplift)
+    w = censoring_regime_weight(d["censoring_score"].values)
+    return (1.0 - w) * baseline + w * latent
 
 
 def finalize_latent_predictions(raw: np.ndarray, df: pd.DataFrame) -> np.ndarray:
@@ -83,17 +129,14 @@ def finalize_latent_predictions(raw: np.ndarray, df: pd.DataFrame) -> np.ndarray
     d = ensure_heuristic_inputs(df)
     pred = np.asarray(raw, dtype=float).copy()
 
-    # Floor: no zero-potential outlets with any history
     median = d["hist_median_vol"].values
     floor = np.maximum(MIN_PREDICTION_LITERS, median * MIN_FLOOR_VS_MEDIAN_RATIO)
     pred = np.maximum(pred, floor)
 
-    # Hard cap vs historical baseline (latent cannot exceed 5x jan_base)
     base = np.maximum(d["jan_base"].values, median)
     cap = base * MAX_POTENTIAL_MULTIPLIER
     pred = np.minimum(pred, cap)
 
-    # Additional uplift for strongly supply-capped outlets
     cens = d["censoring_score"].values
     high = cens > HIGH_CENSORING_THRESHOLD
     if np.any(high):
@@ -102,3 +145,13 @@ def finalize_latent_predictions(raw: np.ndarray, df: pd.DataFrame) -> np.ndarray
         pred = np.minimum(pred, cap)
 
     return np.round(pred, 2)
+
+
+def predict_latent_potential(
+    df: pd.DataFrame,
+    censoring_uplift: float | None = None,
+    catchment_uplift: float | None = None,
+) -> np.ndarray:
+    """End-to-end production prediction (blend + finalize)."""
+    raw = compute_heuristic_potential(df, censoring_uplift, catchment_uplift)
+    return finalize_latent_predictions(raw, df)

@@ -29,6 +29,7 @@ from latent_heuristic import (
     finalize_latent_predictions,
     ensure_heuristic_inputs,
 )
+from heuristic_attribution import compute_heuristic_attributions
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -651,80 +652,50 @@ def main():
     predictions_df.to_csv(OUTPUT / "AI_ACES_predictions.csv", index=False)
     logger.info(f"Predictions saved to {OUTPUT / 'AI_ACES_predictions.csv'}")
     
-    # 8. SHAP Explainability — heuristic components (primary) + optional ML benchmark
-    logger.info("Computing SHAP-style explanations for primary latent heuristic...")
-    # Select sample subset for explanation speed
-    X_explain = gold_feats[feature_cols].copy()
-    for c in feature_cols:
-        if X_explain[c].dtype.name != 'category':
-            X_explain[c] = X_explain[c].fillna(0.0)
-        else:
-            X_explain[c] = X_explain[c].cat.codes
-            
-    class HeuristicRegressor:
-        """Wraps latent heuristic for attribution tooling (log-space)."""
+    # 8. Explainability — exact heuristic waterfall (primary) + optional TreeSHAP benchmark
+    logger.info("Computing exact heuristic component attributions (production XAI)...")
+    explanation_pack = compute_heuristic_attributions(gold_feats)
+    explanation_file = GOLD_DIR / "shap_explanations.pkl"
+    with open(explanation_file, "wb") as f:
+        pickle.dump(explanation_pack, f)
+    logger.info(
+        f"Heuristic waterfall attributions saved -> {explanation_file} "
+        f"({len(explanation_pack['feature_names'])} components)"
+    )
 
-        def predict(self, X: pd.DataFrame) -> np.ndarray:
-            Xh = ensure_heuristic_inputs(X)
-            pot = finalize_latent_predictions(compute_heuristic_potential(Xh), Xh)
-            return np.log1p(pot)
-
-    heuristic_model = HeuristicRegressor()
-    explainer = SimulatedSHAPExplainer(heuristic_model, feature_names=feature_cols)
-    shap_values_obj = explainer(X_explain)
-    logger.info("Heuristic component attributions computed (primary model).")
-
-    # ─── Save real TreeSHAP explanations for XAI service (Priority 3) ───────────────────
-    real_shap_saved = False
     if final_model is not None and SHAP_AVAILABLE and best_ml_benchmark in ("LightGBM", "QuantileRegressor"):
         try:
-            logger.info("Computing TreeSHAP explanations on the best ML benchmark for XAI service...")
+            logger.info("Computing TreeSHAP on ML benchmark (comparison only)...")
             X_explain_lgb = gold_feats[feature_cols].copy()
             for c in feature_cols:
-                if X_explain_lgb[c].dtype.name == 'category':
+                if X_explain_lgb[c].dtype.name == "category":
                     if best_ml_benchmark == "QuantileRegressor":
                         X_explain_lgb[c] = X_explain_lgb[c].cat.codes
-                    # For LightGBM we keep it as 'category' dtype!
                 else:
                     X_explain_lgb[c] = X_explain_lgb[c].fillna(0.0)
 
             tree_explainer = shap.TreeExplainer(final_model)
             shap_explanation = tree_explainer(X_explain_lgb)
-
-            # Ensure we take the appropriate base value format
             if hasattr(shap_explanation.base_values, "__len__"):
                 base_val = float(shap_explanation.base_values[0])
             else:
                 base_val = float(shap_explanation.base_values)
 
-            explanation_pack = {
-                "shap_values":   shap_explanation.values,
-                "base_value":    base_val,
+            benchmark_pack = {
+                "explanation_type": "tree_shap_benchmark",
+                "benchmark_model": best_ml_benchmark,
+                "shap_values": shap_explanation.values,
+                "base_value": base_val,
                 "feature_names": feature_cols,
-                "Outlet_ID":     gold_feats["Outlet_ID"].values,
-                "X_pred":        X_explain_lgb,
+                "Outlet_ID": gold_feats["Outlet_ID"].values,
+                "X_pred": X_explain_lgb,
             }
-            explanation_file = GOLD_DIR / "shap_explanations.pkl"
-            with open(explanation_file, "wb") as f:
-                pickle.dump(explanation_pack, f)
-            logger.info(f"TreeSHAP explanations saved successfully -> {explanation_file}")
-            real_shap_saved = True
+            benchmark_file = GOLD_DIR / "shap_benchmark.pkl"
+            with open(benchmark_file, "wb") as f:
+                pickle.dump(benchmark_pack, f)
+            logger.info(f"TreeSHAP benchmark saved -> {benchmark_file}")
         except Exception as e:
-            logger.warning(f"Failed to calculate real TreeSHAP: {e}. Falling back to simulated heuristic SHAP.")
-
-    if not real_shap_saved:
-        # Fallback to simulated heuristic SHAP if SHAP was not computed/saved
-        explanation_pack = {
-            "shap_values": shap_values_obj.values,
-            "base_value": shap_values_obj.base_values[0] if hasattr(shap_values_obj.base_values, "__len__") else shap_values_obj.base_values,
-            "feature_names": feature_cols,
-            "X_pred": gold_feats[feature_cols].copy(),
-            "Outlet_ID": gold_feats["Outlet_ID"].values
-        }
-        explanation_file = GOLD_DIR / "shap_explanations.pkl"
-        with open(explanation_file, "wb") as f:
-            pickle.dump(explanation_pack, f)
-        logger.info(f"Fallback simulated SHAP explanations saved -> {explanation_file}")
+            logger.warning(f"TreeSHAP benchmark skipped: {e}")
     
     # Save complete Gold Parquet
     gold_feats.to_parquet(GOLD_DIR / "gold_features.parquet", index=False)

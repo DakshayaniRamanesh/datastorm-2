@@ -1,211 +1,142 @@
 {% extends 'base.html' %}
 
 {% block content %}
-<div class="container-fluid p-0">
-    <!-- Header -->
-    <div class="d-flex justify-content-between align-items-center mb-4">
-        <div>
-            <h1 class="h2 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 700;">Trade Spend Budget Allocator</h1>
-            <p class="text-muted mb-0">Run nonlinear convex optimization to distribute trade spend budget and maximize incremental volume lift.</p>
-        </div>
-        <div>
-            <span class="badge-glass badge-green"><i class="fa-solid fa-bolt me-1"></i> SciPy SLSQP Solver</span>
-        </div>
-    </div>
-
-    <!-- Split Layout: Left Form Inputs | Right Current DB Summary -->
-    <div class="row g-4 mb-4">
-        <!-- Input Form -->
-        <div class="col-lg-5">
-            <div class="glass-panel p-4 h-100">
-                <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Optimization Settings</h3>
-                <form method="POST" action="{{ url_for('optimizer.run_allocation') }}">
-                    <div class="mb-3">
-                        <label class="form-label text-muted small font-weight-bold">Total Budget (LKR)</label>
-                        <div class="input-group">
-                            <span class="input-group-text bg-transparent text-muted" style="border: 1px solid var(--border-glass);">LKR</span>
-                            <input type="number" name="budget" class="form-control form-glass" value="{{ budget | int }}" min="100000" step="100000" required>
-                        </div>
-                        <div class="form-text text-muted small mt-1">Recommended: LKR 5,000,000 for Western Province.</div>
-                    </div>
-                    
-                    <div class="mb-4">
-                        <label class="form-label text-muted small font-weight-bold">Max Spend per Outlet (LKR)</label>
-                        <div class="input-group">
-                            <span class="input-group-text bg-transparent text-muted" style="border: 1px solid var(--border-glass);">LKR</span>
-                            <input type="number" name="cap" class="form-control form-glass" value="{{ cap | int }}" min="1000" step="5000" required>
-                        </div>
-                        <div class="form-text text-muted small mt-1">Caps spend per retailer to prevent allocating all budget to massive outlets.</div>
-                    </div>
-                    
-                    <button type="submit" class="btn-glass btn-blue w-100 justify-content-center text-white py-2">
-                        <i class="fa-solid fa-sliders me-1"></i> Execute Convex Solver
-                    </button>
-                </form>
-            </div>
-        </div>
-
-        <!-- Current Database Allocations State -->
-        <div class="col-lg-7">
-            <div class="glass-panel p-4 h-100 d-flex flex-column justify-content-between">
-                <div>
-                    <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Active Allocations Summary (DB State)</h3>
-                    <div class="row g-3">
-                        <div class="col-sm-6">
-                            <div class="p-3 rounded" style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-glass);">
-                                <div class="text-muted small">Total Allocated Funds</div>
-                                <div class="h4 font-weight-bold text-white mb-0" style="font-family: var(--font-outfit);">LKR {{ "{:,.2f}".format(summary.total_spend) }}</div>
-                            </div>
-                        </div>
-                        <div class="col-sm-6">
-                            <div class="p-3 rounded" style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-glass);">
-                                <div class="text-muted small">Expected Volume Lift</div>
-                                <div class="h4 font-weight-bold text-white mb-0" style="font-family: var(--font-outfit); color: var(--color-green) !important;">{{ "{:,.1f}".format(summary.total_lift) }} Liters</div>
-                            </div>
-                        </div>
-                        <div class="col-sm-6">
-                            <div class="p-3 rounded" style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-glass);">
-                                <div class="text-muted small">Outlets Allocated Budget</div>
-                                <div class="h4 font-weight-bold text-white mb-0" style="font-family: var(--font-outfit);">{{ "{:,}".format(summary.funded_count) }} Outlets</div>
-                            </div>
-                        </div>
-                        <div class="col-sm-6">
-                            <div class="p-3 rounded" style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-glass);">
-                                <div class="text-muted small">Expected Revenue Lift</div>
-                                <div class="h4 font-weight-bold text-white mb-0" style="font-family: var(--font-outfit); color: var(--color-gold) !important;">LKR {{ "{:,.0f}".format(summary.total_revenue) }}</div>
-                            </div>
-                        </div>
-                        <div class="col-sm-6">
-                            <div class="p-3 rounded" style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-glass);">
-                                <div class="text-muted small">Average Revenue ROI</div>
-                                <div class="h4 font-weight-bold text-white mb-0" style="font-family: var(--font-outfit); color: var(--color-blue) !important;">{{ "%.4f" | format(summary.avg_revenue_roi) }} LKR/LKR</div>
-                            </div>
-                        </div>
-                        <div class="col-sm-6">
-                            <div class="p-3 rounded" style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-glass);">
-                                <div class="text-muted small">Average Volume Lift ROI</div>
-                                <div class="h5 font-weight-bold text-white mb-0" style="font-family: var(--font-outfit);">{{ "%.6f" | format(summary.avg_roi) }} L/LKR</div>
-                            </div>
-                        </div>
-                    </div>
-                </div>
-                <div class="text-muted small mt-3">
-                    <i class="fa-solid fa-circle-info me-1 text-info"></i> Running a new optimization overrides the active allocations in the database.
-                </div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Results Panel (Visible only after a post run) -->
-    {% if results %}
-    <div class="row g-4 mb-4">
-        <!-- Plotly Allocations Distribution -->
-        <div class="col-lg-6">
-            <div class="glass-panel p-4 h-100">
-                <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Spend Allocations Curve (Top 40 Outlets)</h3>
-                <div id="allocations-chart" style="height: 320px; width: 100%;"></div>
-            </div>
-        </div>
-        
-        <!-- ROI vs Lift Scatter -->
-        <div class="col-lg-6">
-            <div class="glass-panel p-4 h-100">
-                <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Expected Lift vs Trade Spend LKR</h3>
-                <div id="lift-scatter-chart" style="height: 320px; width: 100%;"></div>
-            </div>
-        </div>
-    </div>
-
-    <!-- Allocations Datatable Sample -->
-    <div class="glass-panel p-4">
-        <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Top Bounded Allocations (Sample First 100 Records)</h3>
-        <div class="table-responsive">
-            <table class="table-glass">
-                <thead>
-                    <tr>
-                        <th>Outlet ID</th>
-                        <th>Potential Opportunity Gap</th>
-                        <th>Trade Spend Recommendation</th>
-                        <th>Expected Lift</th>
-                        <th>Expected Revenue</th>
-                        <th>ROI (L/LKR)</th>
-                        <th>Revenue ROI</th>
-                    </tr>
-                </thead>
-                <tbody>
-                    {% for a in results.allocations_sample %}
-                    <tr>
-                        <td>
-                            <a href="{{ url_for('outlets.view_outlet_detail', outlet_id=a.Outlet_ID) }}" class="text-white font-weight-bold" style="text-decoration: none;">
-                                <i class="fa-solid fa-circle-chevron-right text-info me-1"></i> {{ a.Outlet_ID }}
-                            </a>
-                        </td>
-                        <td>{{ "{:,.1f}".format(a.potential_gap) }} L</td>
-                        <td><span class="text-success font-weight-bold">LKR {{ "{:,.2f}".format(a.Trade_Spend_LKR) }}</span></td>
-                        <td><strong>{{ "{:,.1f}".format(a.Expected_Lift) }} L</strong></td>
-                        <td><span class="text-warning font-weight-bold">LKR {{ "{:,.0f}".format(a.Expected_Revenue_LKR) }}</span></td>
-                        <td><span class="text-muted">{{ "%.6f" | format(a.ROI) }}</span></td>
-                        <td><span class="text-success">{{ "%.4f" | format(a.Revenue_ROI) }}</span></td>
-                    </tr>
-                    {% endfor %}
-                </tbody>
-            </table>
-        </div>
-    </div>
-    
-    <script>
-        document.addEventListener("DOMContentLoaded", function() {
-            const resultsData = {{ results.allocations_sample | tojson }};
-            const oids = resultsData.slice(0, 40).map(a => a.Outlet_ID);
-            const spends = resultsData.slice(0, 40).map(a => a.Trade_Spend_LKR);
-            
-            // 1. Spend allocation bar chart
-            const traceBar = {
-                x: oids,
-                y: spends,
-                type: 'bar',
-                marker: { color: 'rgba(0, 168, 255, 0.55)', border: {color: '#00a8ff', width: 1} },
-                name: 'Allocated LKR'
-            };
-            
-            const barLayout = {
-                paper_bgcolor: 'rgba(0,0,0,0)',
-                plot_bgcolor: 'rgba(0,0,0,0)',
-                font: { color: '#9ca3af', family: 'Inter, sans-serif', size: 9 },
-                margin: { l: 60, r: 10, t: 10, b: 65 },
-                xaxis: { tickangle: 45, gridcolor: 'rgba(255,255,255,0.05)' },
-                yaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'Spend LKR' }
-            };
-            
-            Plotly.newPlot('allocations-chart', [traceBar], barLayout, {displayModeBar: false});
-
-            // 2. Lift vs Spend scatter chart
-            const scatterSpends = resultsData.map(a => a.Trade_Spend_LKR);
-            const scatterLifts = resultsData.map(a => a.Expected_Lift);
-            const scatterOids = resultsData.map(a => a.Outlet_ID);
-            
-            const traceScatter = {
-                x: scatterSpends,
-                y: scatterLifts,
-                text: scatterOids,
-                mode: 'markers',
-                type: 'scatter',
-                marker: { color: '#00e676', size: 6, opacity: 0.7 },
-                name: 'Outlets'
-            };
-            
-            const scatterLayout = {
-                paper_bgcolor: 'rgba(0,0,0,0)',
-                plot_bgcolor: 'rgba(0,0,0,0)',
-                font: { color: '#9ca3af', family: 'Inter, sans-serif', size: 9 },
-                margin: { l: 60, r: 10, t: 10, b: 40 },
-                xaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'Spend (LKR)' },
-                yaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'Lift (Liters)' }
-            };
-            
-            Plotly.newPlot('lift-scatter-chart', [traceScatter], scatterLayout, {displayModeBar: false});
-        });
-    </script>
-    {% endif %}
+<div class="mb-3">
+    <div class="page-breadcrumb"><i class="fa-solid fa-house-chimney me-1"></i> / Budget Optimizer</div>
+    <h1 class="page-title">Trade Spend Budget Allocator</h1>
+    <p class="page-subtitle">Distributes budget across Western Province outlets weighted by opportunity gap (predicted potential minus historical sales).</p>
 </div>
+
+<div class="row g-4 mb-4">
+    <div class="col-lg-4">
+        <div class="command-panel p-4 h-100">
+            <h2 class="command-panel-title mb-3" style="border:none;padding:0;background:transparent;">Optimization Settings</h2>
+            <form method="POST" action="{{ url_for('optimizer.run_allocation') }}">
+                <div class="mb-4">
+                    <label class="form-label text-muted small fw-bold">Total Budget (LKR)</label>
+                    <div class="input-group">
+                        <span class="input-group-text bg-white text-muted" style="border:1px solid var(--border-glass);">LKR</span>
+                        <input type="number" name="budget" class="form-control form-glass" value="{{ budget | int }}" min="100000" step="100000" required>
+                    </div>
+                    <div class="form-text text-muted small mt-2">Recommended: LKR 5,000,000 for Western Province pilot.</div>
+                </div>
+                <p class="small text-muted mb-3">
+                    <i class="fa-solid fa-circle-info me-1"></i>
+                    Spend is allocated by <strong>opportunity gap</strong> — no per-outlet cap. Outlets with larger latent upside receive more trade spend until the budget is exhausted.
+                </p>
+                <button type="submit" class="btn-pro w-100 justify-content-center py-2">
+                    <i class="fa-solid fa-play me-1"></i> Run Allocation
+                </button>
+            </form>
+        </div>
+    </div>
+
+    <div class="col-lg-8">
+        <div class="command-panel p-4 h-100">
+            <h2 class="command-panel-title mb-3" style="border:none;padding:0;background:transparent;">Active Allocations Summary</h2>
+            <div class="row g-3">
+                <div class="col-sm-6">
+                    <div class="p-3 rounded border" style="background:#f8fafc;">
+                        <div class="text-muted small">Total Allocated</div>
+                        <div class="h4 fw-bold mb-0" style="font-family:var(--font-outfit);">LKR {{ "{:,.0f}".format(summary.total_spend) }}</div>
+                    </div>
+                </div>
+                <div class="col-sm-6">
+                    <div class="p-3 rounded border" style="background:#f8fafc;">
+                        <div class="text-muted small">Expected Lift</div>
+                        <div class="h4 fw-bold mb-0 text-success" style="font-family:var(--font-outfit);">{{ "{:,.1f}".format(summary.total_lift) }} L</div>
+                    </div>
+                </div>
+                <div class="col-sm-6">
+                    <div class="p-3 rounded border" style="background:#f8fafc;">
+                        <div class="text-muted small">Funded Outlets</div>
+                        <div class="h4 fw-bold mb-0" style="font-family:var(--font-outfit);">{{ "{:,}".format(summary.funded_count) }}</div>
+                    </div>
+                </div>
+                <div class="col-sm-6">
+                    <div class="p-3 rounded border" style="background:#f8fafc;">
+                        <div class="text-muted small">Avg Revenue ROI</div>
+                        <div class="h4 fw-bold mb-0" style="font-family:var(--font-outfit); color:var(--accent-primary);">{{ "%.3f" | format(summary.avg_revenue_roi) }}</div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+{% if results %}
+<div class="row g-4 mb-4">
+    <div class="col-lg-6">
+        <div class="command-panel p-4">
+            <h2 class="command-panel-title mb-2" style="border:none;padding:0;background:transparent;">Spend by Outlet (Top 40)</h2>
+            <div id="allocations-chart" style="height:300px;"></div>
+        </div>
+    </div>
+    <div class="col-lg-6">
+        <div class="command-panel p-4">
+            <h2 class="command-panel-title mb-2" style="border:none;padding:0;background:transparent;">Lift vs Spend</h2>
+            <div id="lift-scatter-chart" style="height:300px;"></div>
+        </div>
+    </div>
+</div>
+
+<div class="command-panel p-0 mb-4" style="max-height:400px; overflow-y:auto;">
+    <div class="command-panel-header">
+        <h2 class="command-panel-title">Allocation Results (Top 100)</h2>
+    </div>
+    <table class="table-pro">
+        <thead>
+            <tr>
+                <th>Outlet</th>
+                <th>Opportunity Gap</th>
+                <th>Trade Spend</th>
+                <th>Expected Lift</th>
+                <th>Revenue ROI</th>
+            </tr>
+        </thead>
+        <tbody>
+            {% for a in results.allocations_sample %}
+            <tr>
+                <td>
+                    <div class="cell-user">
+                        <span class="cell-avatar">{{ a.Outlet_ID[:1] }}</span>
+                        <div>
+                            <a href="{{ url_for('outlets.view_outlet_detail', outlet_id=a.Outlet_ID) }}" class="cell-primary text-decoration-none">{{ a.Outlet_ID }}</a>
+                            <div class="cell-secondary">Gap-weighted allocation</div>
+                        </div>
+                    </div>
+                </td>
+                <td><span class="id-pill">{{ "{:,.0f}".format(a.potential_gap) }} L</span></td>
+                <td><span class="id-pill">LKR {{ "{:,.0f}".format(a.Trade_Spend_LKR) }}</span></td>
+                <td>{{ "{:,.1f}".format(a.Expected_Lift) }} L</td>
+                <td><span class="module-badge"><i class="fa-solid fa-chart-line"></i> {{ "%.2f" | format(a.Revenue_ROI) }}</span></td>
+            </tr>
+            {% endfor %}
+        </tbody>
+    </table>
+</div>
+
+<script>
+document.addEventListener("DOMContentLoaded", function() {
+    const data = {{ results.allocations_sample | tojson }};
+    const top = data.slice(0, 40);
+    const layout = {
+        paper_bgcolor: 'rgba(0,0,0,0)', plot_bgcolor: 'rgba(0,0,0,0)',
+        font: { color: '#6b7280', size: 10 },
+        margin: { l: 50, r: 10, t: 10, b: 60 },
+        xaxis: { gridcolor: '#eef1f5', tickangle: 45 },
+        yaxis: { gridcolor: '#eef1f5' }
+    };
+    Plotly.newPlot('allocations-chart', [{
+        x: top.map(a => a.Outlet_ID), y: top.map(a => a.Trade_Spend_LKR),
+        type: 'bar', marker: { color: '#3b82f6' }
+    }], layout, { displayModeBar: false });
+    Plotly.newPlot('lift-scatter-chart', [{
+        x: data.map(a => a.Trade_Spend_LKR), y: data.map(a => a.Expected_Lift),
+        mode: 'markers', marker: { color: '#16a34a', size: 7, opacity: 0.7 }
+    }], { ...layout, xaxis: { ...layout.xaxis, title: 'Spend LKR' }, yaxis: { ...layout.yaxis, title: 'Lift L' } },
+    { displayModeBar: false });
+});
+</script>
+{% endif %}
 {% endblock %}

@@ -9,7 +9,7 @@ results to the SQLite 'allocations' table, dynamically updating the entire platf
 import logging
 import importlib
 import numpy as np
-from typing import Dict, Any, List, Optional
+from typing import Dict, Any, List, Optional, Union
 
 from app.services.db_service import DBService
 
@@ -33,8 +33,8 @@ class OptimizationService:
             self._price_per_liter = derive_median_price_per_liter()
         return self._price_per_liter
 
-    def run_optimization(self, total_budget: float, max_spend_cap: float) -> Dict[str, Any]:
-        """Perform budget optimization on Western Province outlets and update database records."""
+    def run_optimization(self, total_budget: float, max_spend_cap: Optional[float] = None) -> Dict[str, Any]:
+        """Allocate budget proportional to opportunity gap (no per-outlet cap unless provided)."""
         query = """
             SELECT Outlet_ID, hist_median_vol, Maximum_Monthly_Liters
             FROM outlets
@@ -50,13 +50,19 @@ class OptimizationService:
         predicted_potentials = np.array([o["Maximum_Monthly_Liters"] for o in outlets])
         potentials_gap = np.clip(predicted_potentials - hist_vols, 0.0, None)
 
-        logger.info(f"Running interactive optimization: budget={total_budget}, cap={max_spend_cap} on {N} outlets...")
+        # Default: only the total budget binds; spend follows opportunity gap weights
+        per_outlet_max = max_spend_cap if max_spend_cap is not None else total_budget
+
+        logger.info(
+            "Running optimization: budget=%s on %s outlets (gap-weighted, max_outlet=%s)",
+            total_budget, N, per_outlet_max,
+        )
         spends = allocate_budget_bisection(
             potentials=potentials_gap,
             total_budget=total_budget,
             alpha=ALPHA,
             beta=BETA,
-            max_spend=max_spend_cap,
+            max_spend=per_outlet_max,
         )
 
         lifts = np.round(potentials_gap * ALPHA * np.log1p(spends / BETA), 2)

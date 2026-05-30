@@ -15,14 +15,14 @@ xai_bp = Blueprint("xai", __name__)
 def view_xai():
     """Render global SHAP explainability summaries."""
     importance = xai.get_global_importance()
-    
-    # Cap list at top 15 for snappier plotting
     top_importance = importance[:15]
-    
+    explanation_type = xai.get_explanation_type()
+
     return render_template(
         "xai.html",
         active_page="xai",
-        importance=top_importance
+        importance=top_importance,
+        explanation_type=explanation_type,
     )
 
 @xai_bp.route("/reports")

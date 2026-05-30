@@ -87,11 +87,13 @@ Examples:
         steps.append(("Spatial & Competitor Analytics", "pipeline/03_poi_scraper.py", poi_args))
 
     steps.append(("Gold Features & Model", "pipeline/04_gold_features_model.py", []))
+    steps.append(("Heuristic Calibration (walk-forward)", "pipeline/calibrate_heuristic.py", []))
     steps.append(("Budget Optimization",   "pipeline/05_budget_optimizer.py",    []))
 
     # Out-of-time validation
     if not args.no_validate:
         steps.append(("Out-of-Time Validation", "pipeline/06_validation.py", []))
+        steps.append(("Ceiling Validation Protocol", "pipeline/08_ceiling_validation.py", []))
 
     # Comparison analysis plots
     if not args.no_compare:
@@ -141,6 +143,8 @@ Examples:
     if not args.no_validate:
         print(f"    Validation     -> output/validation_report.csv")
         print(f"    Val Curves     -> output/validation_curves.png")
+        print(f"    Ceiling Val.   -> output/ceiling_validation_report.csv")
+        print(f"    Calibration    -> pipeline/gold/heuristic_calibration.json")
     if not args.no_compare:
         print(f"    Comparison     -> output/comparison_analysis.png")
     print(f"    EDA dashboard  -> output/eda_dashboard.png")

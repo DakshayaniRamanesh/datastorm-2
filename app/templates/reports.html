@@ -15,7 +15,7 @@
 
     {% if report_rows %}
     <!-- Model Averages Panel -->
-    <div class="glass-panel p-4 mb-4">
+    <div class="command-panel p-4 mb-4">
         <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Cross-Validation Averages Summary</h3>
         <div class="table-responsive">
             <table class="table-glass">
@@ -57,13 +57,13 @@
     <!-- Main Images Row -->
     <div class="row g-4 mb-4">
         <div class="col-lg-6">
-            <div class="glass-panel p-4">
+            <div class="command-panel p-4">
                 <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Walk-Forward Validation Curves</h3>
                 <img src="/output/validation_curves.png" class="img-fluid rounded" alt="Validation Curves" style="border: 1px solid var(--border-glass); width: 100%;">
             </div>
         </div>
         <div class="col-lg-6">
-            <div class="glass-panel p-4">
+            <div class="command-panel p-4">
                 <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Diagnostic Comparisons: Input vs Prediction</h3>
                 <img src="/output/comparison_analysis.png" class="img-fluid rounded" alt="Comparison Analysis Plots" style="border: 1px solid var(--border-glass); width: 100%;">
             </div>
@@ -71,7 +71,7 @@
     </div>
 
     <!-- Detailed Folds Datatable -->
-    <div class="glass-panel p-4">
+    <div class="command-panel p-4">
         <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Detailed Cross-Fold Chronological Metrics</h3>
         <div class="table-responsive">
             <table class="table-glass">
@@ -104,7 +104,7 @@
     </div>
     {% else %}
     <!-- Missing validation report card -->
-    <div class="glass-panel p-5 text-center text-muted">
+    <div class="command-panel p-5 text-center text-muted">
         <i class="fa-solid fa-triangle-exclamation fa-4x mb-3 text-warning"></i>
         <h3 class="h5 text-white font-weight-bold mb-2">No Validation Report Found</h3>
         <p class="small mb-4">You must execute the validation pipeline script to generate comparison reports and charts.</p>
