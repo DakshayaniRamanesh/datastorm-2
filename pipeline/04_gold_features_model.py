@@ -1,14 +1,12 @@
 """
 DataStorm 2026 - Gold Features & Model Comparison Framework
 ===========================================================
-Aggregates transactions, incorporates upgraded spatial features,
-engineers advanced demand/performance features, compares three models:
-  1. Phase 1 Multiplicative Heuristic Model
-  2. Standard Machine Learning Quantile Regressor (HistGradientBoosting)
-  3. LightGBM Quantile Regressor (objective="quantile", alpha=0.90)
+Aggregates transactions and spatial features, engineers demand signals, and:
 
-Evaluates using MAE, RMSE, MAPE, and R², selects the best model automatically,
-generates final predictions, and runs SHAP explainability.
+  1. **Primary:** Latent-demand heuristic (`latent_heuristic.py`) → submission predictions
+  2. **Benchmarks:** HistGradientBoosting & LightGBM quantile models on observed sales
+
+ML models are compared chronologically but never auto-selected for production (Option A).
 """
 
 import sys
@@ -21,6 +19,16 @@ import numpy as np
 from pathlib import Path
 from sklearn.ensemble import HistGradientBoostingRegressor
 import lightgbm as lgb
+
+# Ensure pipeline folder is in path for direct execution
+sys.path.append(str(Path(__file__).parent))
+
+from latent_heuristic import (
+    PRIMARY_MODEL_NAME,
+    compute_heuristic_potential,
+    finalize_latent_predictions,
+    ensure_heuristic_inputs,
+)
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -153,164 +161,10 @@ class SimulatedSHAPExplainer:
         return SimulatedExplanation(shap_values, base_val, X_np, self.feature_names)
 
 # ---------------------------------------------------------------------------
-# Advanced Feature Builder
+# Advanced Feature Builder (imported from shared feature_builder)
 # ---------------------------------------------------------------------------
-def build_outlet_features(monthly: pd.DataFrame, target_month: int = 1) -> pd.DataFrame:
-    """Compute per-outlet historical features using vectorized operations."""
-    df = monthly.copy().sort_values(["Outlet_ID", "Year", "Month"])
-    gp = df.groupby("Outlet_ID")
+from feature_builder import build_outlet_features
 
-    # Basic historical sales stats
-    hist_mean_vol = gp["monthly_volume"].mean()
-    hist_median_vol = gp["monthly_volume"].median()
-    hist_max_vol = gp["monthly_volume"].max()
-    hist_p75_vol = gp["monthly_volume"].quantile(0.75)
-    hist_p90_vol = gp["monthly_volume"].quantile(0.90)
-    hist_std_vol = gp["monthly_volume"].std(ddof=0).fillna(0)
-    hist_months = gp["monthly_volume"].count()
-    hist_cv = hist_std_vol / (hist_mean_vol + 1e-9)
-
-    # 1. Censoring score components
-    # Plateau flag (rolling 3-month CV < 10%)
-    df["monthly_volume_sq"] = df["monthly_volume"].pow(2)
-    # Vectorized shift-based rolling 3-month mean
-    mask3 = (df["Outlet_ID"] == df["Outlet_ID"].shift(2))
-    roll3_mean = (df["monthly_volume"] + df["monthly_volume"].shift(1) + df["monthly_volume"].shift(2)) / 3.0
-    roll3_mean = pd.Series(np.where(mask3, roll3_mean, np.nan), index=df.index)
-    roll3_mean_sq = (df["monthly_volume_sq"] + df["monthly_volume_sq"].shift(1) + df["monthly_volume_sq"].shift(2)) / 3.0
-    roll3_mean_sq = pd.Series(np.where(mask3, roll3_mean_sq, np.nan), index=df.index)
-    roll3_std = np.sqrt(np.clip(roll3_mean_sq - np.square(roll3_mean), 0.0, None))
-    roll3_cv = roll3_std / (roll3_mean + 1e-9)
-    df["plateau_flag"] = (roll3_cv < 0.10).astype(float)
-    df.loc[df["Outlet_ID"].isin(hist_months[hist_months < 3].index), "plateau_flag"] = np.nan
-    cens_plateau = df.groupby("Outlet_ID")["plateau_flag"].mean().fillna(0.0)
-
-    # Distributor Cap flag
-    df["at_cap_flag"] = (
-        np.abs(df["monthly_volume"] - df["dist_month_median"])
-        / (df["dist_month_median"] + 1e-9) < 0.15
-    ).astype(float)
-    cens_dist_cap = df.groupby("Outlet_ID")["at_cap_flag"].mean().fillna(0.0)
-
-    # Stagnation
-    yearly = df.groupby(["Outlet_ID", "Year"])["monthly_volume"].mean().reset_index().sort_values(["Outlet_ID", "Year"])
-    yearly["growth"] = yearly.groupby("Outlet_ID")["monthly_volume"].pct_change()
-    yearly["stagnation_flag"] = np.where(yearly["growth"].isna(), np.nan, (np.abs(yearly["growth"]) < 0.05).astype(float))
-    cens_stagnation = yearly.groupby("Outlet_ID")["stagnation_flag"].mean().fillna(0.0)
-    yoy_growth = yearly.groupby("Outlet_ID")["growth"].mean().fillna(0.0).clip(-0.30, 0.50)
-
-    # Low CV Score
-    cens_cv_score = ((0.30 - hist_cv) / 0.30).clip(lower=0.0)
-
-    # Q4 Suppression
-    df["q4_vol"] = np.where(df["Month"].isin([10, 11, 12]), df["monthly_volume"], np.nan)
-    q4_mean = df.groupby("Outlet_ID")["q4_vol"].mean()
-    q4_count = df.groupby("Outlet_ID")["q4_vol"].count()
-    q4_prem = q4_mean / (hist_mean_vol + 1e-9) - 1.0
-    cens_q4_raw = (-q4_prem * 2.0).clip(0.0, 1.0).fillna(0.0)
-    cens_q4_suppression = pd.Series(np.where(q4_count >= 2, cens_q4_raw, 0.0), index=hist_mean_vol.index)
-
-    # Composite Censoring Score
-    censoring_score = (
-        0.30 * cens_plateau
-        + 0.25 * cens_dist_cap
-        + 0.20 * cens_stagnation
-        + 0.15 * cens_cv_score
-        + 0.10 * cens_q4_suppression
-    ).clip(0.0, 1.0)
-
-    # 2. Performance & Capacity features
-    capacity_proximity_ratio = pd.Series(
-        np.clip(
-            np.where(
-                hist_months >= 3,
-                roll3_mean.groupby(df["Outlet_ID"]).mean() / (hist_max_vol + 1e-9),
-                hist_mean_vol / (hist_max_vol + 1e-9)
-            ), 0.0, 1.0
-        ), index=hist_mean_vol.index
-    )
-
-    # Purchase Pace Variance (rolling 6-month CV average)
-    # Vectorized shift-based rolling 6-month mean
-    mask6 = (df["Outlet_ID"] == df["Outlet_ID"].shift(5))
-    roll6_mean = (
-        df["monthly_volume"] + 
-        df["monthly_volume"].shift(1) + 
-        df["monthly_volume"].shift(2) + 
-        df["monthly_volume"].shift(3) + 
-        df["monthly_volume"].shift(4) + 
-        df["monthly_volume"].shift(5)
-    ) / 6.0
-    roll6_mean = pd.Series(np.where(mask6, roll6_mean, np.nan), index=df.index)
-    roll6_mean_sq = (
-        df["monthly_volume_sq"] + 
-        df["monthly_volume_sq"].shift(1) + 
-        df["monthly_volume_sq"].shift(2) + 
-        df["monthly_volume_sq"].shift(3) + 
-        df["monthly_volume_sq"].shift(4) + 
-        df["monthly_volume_sq"].shift(5)
-    ) / 6.0
-    roll6_mean_sq = pd.Series(np.where(mask6, roll6_mean_sq, np.nan), index=df.index)
-    roll6_std = np.sqrt(np.clip(roll6_mean_sq - np.square(roll6_mean), 0.0, None))
-    roll6_cv = roll6_std / (roll6_mean + 1e-9)
-    purchase_pace_variance = pd.Series(
-        np.where(hist_months >= 6, roll6_cv.groupby(df["Outlet_ID"]).mean(), hist_cv),
-        index=hist_mean_vol.index
-    )
-
-    # Distributor Relative Rank mean
-    dist_rank_mean = df.groupby("Outlet_ID")["dist_month_rank"].mean()
-
-    # Target-month historical mean
-    target_vols = df[df["Month"] == target_month]
-    target_mean = target_vols.groupby("Outlet_ID")["monthly_volume"].mean().reindex(hist_mean_vol.index).fillna(hist_mean_vol)
-
-    # Primary Distributor ID
-    dist_sums = df.groupby(["Outlet_ID", "Distributor_ID"])["monthly_volume"].sum().reset_index()
-    primary_dist = dist_sums.sort_values("monthly_volume").groupby("Outlet_ID")["Distributor_ID"].last()
-
-    # Rolling median & maximum features
-    # Vectorized rolling median and maximum (min_periods=1)
-    m1 = (df["Outlet_ID"] == df["Outlet_ID"].shift(1))
-    m2 = (df["Outlet_ID"] == df["Outlet_ID"].shift(2))
-    c0 = df["monthly_volume"]
-    c1 = np.where(m1, df["monthly_volume"].shift(1), np.nan)
-    c2 = np.where(m2, df["monthly_volume"].shift(2), np.nan)
-    stacked = np.column_stack([c0, c1, c2])
-    roll_med_all = np.nanmedian(stacked, axis=1)
-    roll_max_all = np.nanmax(stacked, axis=1)
-    df_roll_med = pd.Series(roll_med_all, index=df.index)
-    df_roll_max = pd.Series(roll_max_all, index=df.index)
-    rolling_median = df_roll_med.groupby(df["Outlet_ID"]).last().reindex(hist_mean_vol.index)
-    rolling_maximum = df_roll_max.groupby(df["Outlet_ID"]).last().reindex(hist_mean_vol.index)
-
-    # Peer group SFA Frontier proxy
-    # Will be merged in main pipeline step since it needs outlet metadata
-
-    return pd.DataFrame({
-        "hist_mean_vol": hist_mean_vol,
-        "hist_median_vol": hist_median_vol,
-        "hist_max_vol": hist_max_vol,
-        "hist_p75_vol": hist_p75_vol,
-        "hist_p90_vol": hist_p90_vol,
-        "hist_std_vol": hist_std_vol,
-        "hist_cv": hist_cv,
-        "hist_months": hist_months,
-        "censoring_score": censoring_score,
-        "cens_plateau": cens_plateau,
-        "cens_dist_cap": cens_dist_cap,
-        "cens_stagnation": cens_stagnation,
-        "cens_cv_score": cens_cv_score,
-        "cens_q4_suppression": cens_q4_suppression,
-        "yoy_growth": yoy_growth,
-        "jan_hist_mean": target_mean,
-        "capacity_proximity_ratio": capacity_proximity_ratio,
-        "purchase_pace_variance": purchase_pace_variance,
-        "dist_rank_mean": dist_rank_mean,
-        "primary_dist": primary_dist,
-        "rolling_median": rolling_median,
-        "rolling_maximum": rolling_maximum
-    }).reset_index()
 
 # ---------------------------------------------------------------------------
 # Training Records Sliding Window builder
@@ -333,6 +187,15 @@ def build_training_records(
     all_periods = [p for p in all_periods if p != (2026, 1)]
     target_periods = all_periods[-n_months:]
     
+    # Load holiday calendar for Priority 4
+    holiday_path = SILVER / "holiday_list.parquet"
+    holidays = None
+    if holiday_path.exists():
+        holidays = pd.read_parquet(holiday_path)
+        holidays["Date"] = pd.to_datetime(holidays["Date"])
+        holidays["Year"] = holidays["Date"].dt.year
+        holidays["Month"] = holidays["Date"].dt.month
+        
     records = []
     for (yr, mo) in target_periods:
         cutoff_period = yr * 12 + mo
@@ -382,6 +245,15 @@ def build_training_records(
         feats = feats.merge(actual, on="Outlet_ID", how="inner")
         feats = feats[feats["actual_vol"] > 0].copy()
         feats["target_log_vol"] = np.log1p(feats["actual_vol"])
+        
+        # Holiday features (Priority 4)
+        if holidays is not None:
+            target_holidays = holidays[(holidays["Year"] == yr) & (holidays["Month"] == mo)]
+            holiday_count = len(target_holidays)
+        else:
+            holiday_count = 0
+        feats["jan_holiday_count"] = holiday_count
+        feats["high_holiday_month"] = int(holiday_count >= 3)
         
         records.append(feats)
         
@@ -465,6 +337,19 @@ def main():
     gold_feats["jan_season_factor"] = gold_feats["jan_seasonality"].map(SEASONALITY_MULTIPLIER).fillna(1.0)
     gold_feats["target_season_factor"] = gold_feats["jan_season_factor"]
     gold_feats["target_month"] = 1
+    
+    # Load holiday calendar for Priority 4
+    holiday_path = SILVER / "holiday_list.parquet"
+    if holiday_path.exists():
+        holidays_jan = pd.read_parquet(holiday_path)
+        holidays_jan["Date"] = pd.to_datetime(holidays_jan["Date"])
+        jan_holidays = holidays_jan[(holidays_jan["Date"].dt.year == 2026) & (holidays_jan["Date"].dt.month == 1)]
+        holiday_count_jan = len(jan_holidays)
+    else:
+        holiday_count_jan = 0
+    gold_feats["jan_holiday_count"] = holiday_count_jan
+    gold_feats["high_holiday_month"] = int(holiday_count_jan >= 3)
+    logger.info(f"January 2026 public holidays: {holiday_count_jan}")
     
     # Interpretability factors
     gold_feats["size_factor"] = gold_feats["Outlet_Size"].map(SIZE_POTENTIAL_FACTOR).fillna(1.0)
@@ -619,7 +504,8 @@ def main():
         "market_saturation_index", "competition_dampener", "gravity_catchment_score",
         "market_accessibility", "population_proxy", "peer_efficiency_gap",
         "outlet_efficiency_index", "seasonality_strength", "local_peer_performance",
-        "regional_peer_performance", "hyperlocal_competition"
+        "regional_peer_performance", "hyperlocal_competition",
+        "jan_holiday_count", "high_holiday_month"
     ]
     
     # Verify presence in dataframes
@@ -665,17 +551,9 @@ def main():
             
     logger.info(f"Train Fold: {len(X_train_f):,} samples | Val Fold: {len(X_val_f):,} samples")
     
-    # --- MODEL 1: Heuristic Model ---
-    y_pred_heur = (
-        val_fold["jan_base"] *
-        val_fold["size_factor"] *
-        val_fold["type_factor"] *
-        val_fold["target_season_factor"] *
-        (1.0 + val_fold["censoring_score"] * 0.40) *
-        val_fold["peer_efficiency_gap"] *
-        (1.0 + val_fold["combined_catchment_score"] * 0.15) *
-        val_fold["competition_dampener"]
-    ).values
+    # --- MODEL 1: Primary Latent Heuristic (production model) ---
+    val_fold_h = ensure_heuristic_inputs(val_fold)
+    y_pred_heur = finalize_latent_predictions(compute_heuristic_potential(val_fold_h), val_fold_h)
     metrics_heur = compute_metrics(y_val_actual, y_pred_heur)
     
     # --- MODEL 2: Quantile Regressor (GB) ---
@@ -708,82 +586,60 @@ def main():
     logger.info("\n" + "="*80 + "\nMODEL COMPARISON RESULTS (CHRONOLOGICAL VAL WINDOW):\n" + "="*80)
     logger.info(f"{'Model':<30} | {'MAE':<12} | {'RMSE':<12} | {'MAPE %':<10} | {'R²':<8}")
     logger.info("-"*80)
-    logger.info(f"{'1. Heuristic Model':<30} | {metrics_heur['MAE']:<12.2f} | {metrics_heur['RMSE']:<12.2f} | {metrics_heur['MAPE_%']:<10.2f} | {metrics_heur['R2']:<8.4f}")
+    logger.info(f"{'1. Heuristic_Latent (Primary)':<30} | {metrics_heur['MAE']:<12.2f} | {metrics_heur['RMSE']:<12.2f} | {metrics_heur['MAPE_%']:<10.2f} | {metrics_heur['R2']:<8.4f}")
     logger.info(f"{'2. Quantile Regressor (GB)':<30} | {metrics_hgb['MAE']:<12.2f} | {metrics_hgb['RMSE']:<12.2f} | {metrics_hgb['MAPE_%']:<10.2f} | {metrics_hgb['R2']:<8.4f}")
     logger.info(f"{'3. LightGBM Quantile Regressor':<30} | {metrics_lgb['MAE']:<12.2f} | {metrics_lgb['RMSE']:<12.2f} | {metrics_lgb['MAPE_%']:<10.2f} | {metrics_lgb['R2']:<8.4f}")
     logger.info("="*80)
     
-    # Model Selection Auto Decision
+    # ML benchmark ranking (observed-volume fit — not used for submission)
     model_choices = {
-        "Heuristic": (metrics_heur["MAPE_%"], metrics_heur["MAE"]),
+        "Heuristic_Latent": (metrics_heur["MAPE_%"], metrics_heur["MAE"]),
         "QuantileRegressor": (metrics_hgb["MAPE_%"], metrics_hgb["MAE"]),
-        "LightGBM": (metrics_lgb["MAPE_%"], metrics_lgb["MAE"])
+        "LightGBM": (metrics_lgb["MAPE_%"], metrics_lgb["MAE"]),
     }
-    
-    # Select best model (prioritize lowest MAPE)
-    best_model_name = min(model_choices, key=lambda k: model_choices[k][0])
-    logger.info(f"Auto-Selection Result: '{best_model_name}' selected as best model.")
-    
-    # Save validation records for the validation comparison page
-    validation_report = pd.DataFrame([
-        {"Model": "Heuristic", **metrics_heur},
-        {"Model": "Quantile Regressor", **metrics_hgb},
-        {"Model": "LightGBM Quantile", **metrics_lgb}
+    best_ml_benchmark = min(
+        (k for k in model_choices if k != "Heuristic_Latent"),
+        key=lambda k: model_choices[k][0],
+    )
+    logger.info(
+        f"Primary production model: '{PRIMARY_MODEL_NAME}' (latent heuristic). "
+        f"Best ML benchmark on observed sales: '{best_ml_benchmark}'."
+    )
+
+    benchmark_report = pd.DataFrame([
+        {"Model": "Heuristic_Latent (Primary)", "Role": "production", **metrics_heur},
+        {"Model": "Quantile Regressor", "Role": "benchmark", **metrics_hgb},
+        {"Model": "LightGBM Quantile", "Role": "benchmark", **metrics_lgb},
     ])
-    validation_report.to_csv(OUTPUT / "validation_report.csv", index=False)
-    
-    # 7. Final Model Retraining & Inference (January 2026 Prediction)
-    logger.info("Retraining final selected model on FULL training panel...")
+    benchmark_report.to_csv(OUTPUT / "model_benchmark_chronological.csv", index=False)
+
+    # 7. January 2026 predictions — always latent heuristic (Option A)
+    logger.info("Generating January 2026 predictions with primary latent heuristic...")
+    gold_feats = ensure_heuristic_inputs(gold_feats)
+    raw_heur = compute_heuristic_potential(gold_feats)
+    gold_feats["Maximum_Monthly_Liters"] = finalize_latent_predictions(raw_heur, gold_feats)
+    gold_feats["primary_model"] = PRIMARY_MODEL_NAME
+    gold_feats["ml_benchmark_best"] = best_ml_benchmark
+
+    # Retrain best ML benchmark only for SHAP comparison / diagnostics (optional)
     X_full = train_panel[feature_cols].copy()
     y_full = train_panel["target_log_vol"].values
-    
     for c in feature_cols:
-        if X_full[c].dtype.name != 'category':
+        if X_full[c].dtype.name != "category":
             X_full[c] = X_full[c].fillna(0.0)
             gold_feats[c] = gold_feats[c].fillna(0.0)
-            
-    if best_model_name == "LightGBM":
+
+    final_model = None
+    if best_ml_benchmark == "LightGBM":
         final_model = lgb.LGBMRegressor(**LGB_QR_PARAMS)
         final_model.fit(X_full, y_full, categorical_feature=[c for c in cat_cols if c in X_full.columns])
-        
-        # Predict Jan 2026
-        log_pred = final_model.predict(gold_feats[feature_cols])
-        raw_pred = np.clip(np.expm1(log_pred), 1.0, None)
-        
-    elif best_model_name == "QuantileRegressor":
+    elif best_ml_benchmark == "QuantileRegressor":
         final_model = HistGradientBoostingRegressor(loss="quantile", quantile=0.90, max_iter=200, random_state=42)
         X_full_num = X_full.copy()
-        X_gold_num = gold_feats[feature_cols].copy()
         for cat in cat_cols:
             if cat in X_full_num.columns:
                 X_full_num[cat] = X_full_num[cat].cat.codes
-                X_gold_num[cat] = X_gold_num[cat].cat.codes
         final_model.fit(X_full_num, y_full)
-        log_pred = final_model.predict(X_gold_num)
-        raw_pred = np.clip(np.expm1(log_pred), 1.0, None)
-        
-    else:  # Heuristic Fallback
-        raw_pred = (
-            gold_feats["jan_base"] *
-            gold_feats["size_factor"] *
-            gold_feats["type_factor"] *
-            gold_feats["target_season_factor"] *
-            (1.0 + gold_feats["censoring_score"] * 0.40) *
-            gold_feats["peer_efficiency_gap"] *
-            (1.0 + gold_feats["combined_catchment_score"] * 0.15) *
-            gold_feats["competition_dampener"]
-        ).values
-        
-    gold_feats["Maximum_Monthly_Liters"] = np.round(raw_pred, 2)
-    
-    # --- Post-Processing / Censoring Calibration ---
-    # Apply small calibration adjustment (+10% to +20%) to highly constrained outlets
-    # to estimate true latent potential since training inputs were censored.
-    high_cens = gold_feats["censoring_score"] > 0.40
-    calibration_uplift = 1.0 + (gold_feats.loc[high_cens, "censoring_score"] - 0.40) * 0.33
-    gold_feats.loc[high_cens, "Maximum_Monthly_Liters"] = (
-        gold_feats.loc[high_cens, "Maximum_Monthly_Liters"] * calibration_uplift
-    ).round(2)
     
     # Effective Potential Multiplier for visualizations
     gold_feats["potential_multiplier"] = (
@@ -795,8 +651,8 @@ def main():
     predictions_df.to_csv(OUTPUT / "AI_ACES_predictions.csv", index=False)
     logger.info(f"Predictions saved to {OUTPUT / 'AI_ACES_predictions.csv'}")
     
-    # 8. SHAP Explainability computation
-    logger.info("Computing SHAP explanations for selected model...")
+    # 8. SHAP Explainability — heuristic components (primary) + optional ML benchmark
+    logger.info("Computing SHAP-style explanations for primary latent heuristic...")
     # Select sample subset for explanation speed
     X_explain = gold_feats[feature_cols].copy()
     for c in feature_cols:
@@ -805,50 +661,70 @@ def main():
         else:
             X_explain[c] = X_explain[c].cat.codes
             
-    if best_model_name in ["LightGBM", "QuantileRegressor"] and SHAP_AVAILABLE:
+    class HeuristicRegressor:
+        """Wraps latent heuristic for attribution tooling (log-space)."""
+
+        def predict(self, X: pd.DataFrame) -> np.ndarray:
+            Xh = ensure_heuristic_inputs(X)
+            pot = finalize_latent_predictions(compute_heuristic_potential(Xh), Xh)
+            return np.log1p(pot)
+
+    heuristic_model = HeuristicRegressor()
+    explainer = SimulatedSHAPExplainer(heuristic_model, feature_names=feature_cols)
+    shap_values_obj = explainer(X_explain)
+    logger.info("Heuristic component attributions computed (primary model).")
+
+    # ─── Save real TreeSHAP explanations for XAI service (Priority 3) ───────────────────
+    real_shap_saved = False
+    if final_model is not None and SHAP_AVAILABLE and best_ml_benchmark in ("LightGBM", "QuantileRegressor"):
         try:
-            explainer = shap.TreeExplainer(final_model)
-            shap_values_obj = explainer(X_explain)
-            logger.info("Tree SHAP computation completed.")
+            logger.info("Computing TreeSHAP explanations on the best ML benchmark for XAI service...")
+            X_explain_lgb = gold_feats[feature_cols].copy()
+            for c in feature_cols:
+                if X_explain_lgb[c].dtype.name == 'category':
+                    if best_ml_benchmark == "QuantileRegressor":
+                        X_explain_lgb[c] = X_explain_lgb[c].cat.codes
+                    # For LightGBM we keep it as 'category' dtype!
+                else:
+                    X_explain_lgb[c] = X_explain_lgb[c].fillna(0.0)
+
+            tree_explainer = shap.TreeExplainer(final_model)
+            shap_explanation = tree_explainer(X_explain_lgb)
+
+            # Ensure we take the appropriate base value format
+            if hasattr(shap_explanation.base_values, "__len__"):
+                base_val = float(shap_explanation.base_values[0])
+            else:
+                base_val = float(shap_explanation.base_values)
+
+            explanation_pack = {
+                "shap_values":   shap_explanation.values,
+                "base_value":    base_val,
+                "feature_names": feature_cols,
+                "Outlet_ID":     gold_feats["Outlet_ID"].values,
+                "X_pred":        X_explain_lgb,
+            }
+            explanation_file = GOLD_DIR / "shap_explanations.pkl"
+            with open(explanation_file, "wb") as f:
+                pickle.dump(explanation_pack, f)
+            logger.info(f"TreeSHAP explanations saved successfully -> {explanation_file}")
+            real_shap_saved = True
         except Exception as e:
-            logger.warning(f"Tree SHAP failed: {e}. Falling back to Simulated SHAP Explainer.")
-            explainer = SimulatedSHAPExplainer(final_model, feature_names=feature_cols)
-            shap_values_obj = explainer(X_explain)
-    else:
-        # Fallback simulated explainer
-        logger.info("Using Simulated SHAP Explainer.")
-        # If heuristic was chosen, we wrap it in a mock regressor for SHAP compatibility
-        if best_model_name == "Heuristic":
-            class HeuristicRegressor:
-                def __init__(self, df, feats):
-                    self.df = df
-                    self.feats = feats
-                def predict(self, X):
-                    # compute heuristic output
-                    return np.log1p(
-                        X["jan_base"] * X["size_factor"] * X["type_factor"] * X["target_season_factor"] *
-                        (1.0 + X["censoring_score"] * 0.40) * X["peer_efficiency_gap"] *
-                        (1.0 + X["combined_catchment_score"] * 0.15) * X["competition_dampener"]
-                    ).values
-            mock_model = HeuristicRegressor(gold_feats, feature_cols)
-            explainer = SimulatedSHAPExplainer(mock_model, feature_names=feature_cols)
-        else:
-            explainer = SimulatedSHAPExplainer(final_model, feature_names=feature_cols)
-        shap_values_obj = explainer(X_explain)
-        
-    # Save Explanations to Pickle for Flask Services
-    explanation_pack = {
-        "shap_values": shap_values_obj.values,
-        "base_value": shap_values_obj.base_values[0] if hasattr(shap_values_obj.base_values, "__len__") else shap_values_obj.base_values,
-        "feature_names": feature_cols,
-        "X_pred": gold_feats[feature_cols].copy(),
-        "Outlet_ID": gold_feats["Outlet_ID"].values
-    }
-    
-    explanation_file = GOLD_DIR / "shap_explanations.pkl"
-    with open(explanation_file, "wb") as f:
-        pickle.dump(explanation_pack, f)
-    logger.info(f"SHAP explanations saved to {explanation_file}")
+            logger.warning(f"Failed to calculate real TreeSHAP: {e}. Falling back to simulated heuristic SHAP.")
+
+    if not real_shap_saved:
+        # Fallback to simulated heuristic SHAP if SHAP was not computed/saved
+        explanation_pack = {
+            "shap_values": shap_values_obj.values,
+            "base_value": shap_values_obj.base_values[0] if hasattr(shap_values_obj.base_values, "__len__") else shap_values_obj.base_values,
+            "feature_names": feature_cols,
+            "X_pred": gold_feats[feature_cols].copy(),
+            "Outlet_ID": gold_feats["Outlet_ID"].values
+        }
+        explanation_file = GOLD_DIR / "shap_explanations.pkl"
+        with open(explanation_file, "wb") as f:
+            pickle.dump(explanation_pack, f)
+        logger.info(f"Fallback simulated SHAP explanations saved -> {explanation_file}")
     
     # Save complete Gold Parquet
     gold_feats.to_parquet(GOLD_DIR / "gold_features.parquet", index=False)

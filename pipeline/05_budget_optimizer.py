@@ -40,6 +40,18 @@ BUDGET_LKR = 5000000.0
 MAX_SPEND_PER_OUTLET_LKR = 100000.0  # Parity cap per outlet
 ALPHA = 0.15
 BETA = 10000.0
+SILVER = ROOT / "pipeline" / "silver"
+
+
+def derive_median_price_per_liter() -> float:
+    """Median outlet-level LKR/liter from silver transactions (revenue framing)."""
+    tx_silver = pd.read_parquet(SILVER / "transactions.parquet")
+    per_outlet = tx_silver.groupby("Outlet_ID").apply(
+        lambda d: d["Total_Bill_Value"].sum() / (d["Volume_Liters"].sum() + 1e-9),
+        include_groups=False,
+    )
+    return float(per_outlet.median())
+
 
 def allocate_budget_bisection(
     potentials: np.ndarray,
@@ -128,8 +140,19 @@ def main():
         0.0
     )
     
+    logger.info("Computing revenue framing (median LKR per liter)...")
+    price_per_liter = derive_median_price_per_liter()
+    logger.info(f"Derived median LKR price per liter: {price_per_liter:.2f}")
+    
+    wp_df["Expected_Revenue_LKR"] = np.round(wp_df["Expected_Lift"] * price_per_liter, 2)
+    wp_df["Revenue_ROI"] = np.where(
+        wp_df["Trade_Spend_LKR"] > 0,
+        np.round(wp_df["Expected_Revenue_LKR"] / wp_df["Trade_Spend_LKR"], 4),
+        0.0
+    )
+    
     # 6. Format and save output
-    output_cols = ["Outlet_ID", "Trade_Spend_LKR", "Expected_Lift", "ROI"]
+    output_cols = ["Outlet_ID", "Trade_Spend_LKR", "Expected_Lift", "ROI", "Expected_Revenue_LKR", "Revenue_ROI"]
     allocations_df = wp_df[output_cols].copy()
     
     # Sort by spend descending for readability
@@ -147,15 +170,19 @@ def main():
     # 7. Print summary statistics
     total_allocated = allocations_df["Trade_Spend_LKR"].sum()
     total_lift = allocations_df["Expected_Lift"].sum()
+    total_revenue_lift = allocations_df["Expected_Revenue_LKR"].sum()
     active_allocations = (allocations_df["Trade_Spend_LKR"] > 0).sum()
     avg_roi = allocations_df.loc[allocations_df["Trade_Spend_LKR"] > 0, "ROI"].mean() if active_allocations > 0 else 0.0
+    avg_rev_roi = allocations_df.loc[allocations_df["Trade_Spend_LKR"] > 0, "Revenue_ROI"].mean() if active_allocations > 0 else 0.0
     
     logger.info("\n" + "="*80 + "\nBUDGET OPTIMIZATION SUMMARY:\n" + "="*80)
     logger.info(f"Total Budget LKR:             {BUDGET_LKR:,.2f}")
     logger.info(f"Total Allocated LKR:          {total_allocated:,.2f} ({(total_allocated/BUDGET_LKR)*100:.2f}%)")
     logger.info(f"Total Incremental Lift (L):   {total_lift:,.2f} Liters")
+    logger.info(f"Total Expected Revenue (LKR): LKR {total_revenue_lift:,.2f}")
     logger.info(f"Outlets receiving budget:     {active_allocations:,} / {len(wp_df):,} ({(active_allocations/len(wp_df))*100:.1f}%)")
     logger.info(f"Average Lift per LKR (ROI):   {avg_roi:.6f} Liters/LKR")
+    logger.info(f"Average Revenue ROI (Return):  {avg_rev_roi:.4f} LKR/LKR spent")
     logger.info(f"Maximum Spend on single outlet: LKR {allocations_df['Trade_Spend_LKR'].max():,.2f}")
     logger.info("="*80 + "\n")
 

@@ -97,7 +97,9 @@ class DBService:
                         Outlet_ID TEXT PRIMARY KEY,
                         Trade_Spend_LKR REAL,
                         Expected_Lift REAL,
-                        ROI REAL
+                        ROI REAL,
+                        Expected_Revenue_LKR REAL,
+                        Revenue_ROI REAL
                     )
                 """)
 

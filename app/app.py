@@ -50,8 +50,9 @@ def create_app() -> Flask:
     """Application factory for the Flask server."""
     app = Flask(__name__)
     
-    # Simple configuration
-    app.config["SECRET_KEY"] = "datastorm_aces_secret"
+    # Simple configuration (harkened for security)
+    import secrets
+    app.config["SECRET_KEY"] = os.environ.get("SECRET_KEY", secrets.token_hex(32))
     app.config["TEMPLATES_AUTO_RELOAD"] = True
     
     # 1. Register blueprints
@@ -92,4 +93,4 @@ app = create_app()
 
 if __name__ == "__main__":
     logger.info("Starting Flask dev server...")
-    app.run(host="0.0.0.0", port=5000, debug=True)
+    app.run(host="0.0.0.0", port=5000, debug=os.environ.get("FLASK_DEBUG", "0") == "1")

@@ -49,7 +49,8 @@
                 <div class="kpi-value">{{ "{:,.0f}".format(kpis.total_expected_lift) }} L</div>
                 <div class="kpi-sub">
                     {% if kpis.total_spend_allocated > 0 %}
-                    <span class="kpi-trend-up"><i class="fa-solid fa-chart-line me-1"></i> ROI: {{ (kpis.total_expected_lift / kpis.total_spend_allocated) | round(4) }} L/LKR</span>
+                    <span class="kpi-trend-up"><i class="fa-solid fa-chart-line me-1"></i> LKR {{ "{:,.0f}".format(kpis.total_expected_revenue) }} revenue</span>
+                    <span class="ms-2">({{ "%.3f" | format(kpis.avg_revenue_roi) }} LKR/LKR ROI)</span>
                     {% else %}
                     <span>No allocation active</span>
                     {% endif %}

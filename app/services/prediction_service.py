@@ -43,21 +43,29 @@ class PredictionService:
         # Load budget spend lift if available
         try:
             alloc_query = """
-                SELECT 
+                SELECT
                     SUM(Trade_Spend_LKR) as total_spend,
-                    SUM(Expected_Lift) as total_lift
+                    SUM(Expected_Lift) as total_lift,
+                    SUM(Expected_Revenue_LKR) as total_revenue,
+                    AVG(Revenue_ROI) as avg_revenue_roi
                 FROM allocations
             """
             alloc_res = self.db.execute_query(alloc_query)
             if alloc_res and alloc_res[0]["total_spend"]:
                 kpis["total_spend_allocated"] = alloc_res[0]["total_spend"]
                 kpis["total_expected_lift"] = alloc_res[0]["total_lift"]
+                kpis["total_expected_revenue"] = alloc_res[0].get("total_revenue") or 0.0
+                kpis["avg_revenue_roi"] = alloc_res[0].get("avg_revenue_roi") or 0.0
             else:
                 kpis["total_spend_allocated"] = 0.0
                 kpis["total_expected_lift"] = 0.0
+                kpis["total_expected_revenue"] = 0.0
+                kpis["avg_revenue_roi"] = 0.0
         except Exception:
             kpis["total_spend_allocated"] = 0.0
             kpis["total_expected_lift"] = 0.0
+            kpis["total_expected_revenue"] = 0.0
+            kpis["avg_revenue_roi"] = 0.0
             
         return kpis
 
@@ -163,7 +171,9 @@ class PredictionService:
             SELECT o.*, 
                    COALESCE(a.Trade_Spend_LKR, 0.0) as Trade_Spend_LKR,
                    COALESCE(a.Expected_Lift, 0.0) as Expected_Lift,
-                   COALESCE(a.ROI, 0.0) as ROI
+                   COALESCE(a.ROI, 0.0) as ROI,
+                   COALESCE(a.Expected_Revenue_LKR, 0.0) as Expected_Revenue_LKR,
+                   COALESCE(a.Revenue_ROI, 0.0) as Revenue_ROI
             FROM outlets o
             LEFT JOIN allocations a ON o.Outlet_ID = a.Outlet_ID
             {where_sql}
@@ -187,7 +197,9 @@ class PredictionService:
             SELECT o.*, 
                    COALESCE(a.Trade_Spend_LKR, 0.0) as Trade_Spend_LKR,
                    COALESCE(a.Expected_Lift, 0.0) as Expected_Lift,
-                   COALESCE(a.ROI, 0.0) as ROI
+                   COALESCE(a.ROI, 0.0) as ROI,
+                   COALESCE(a.Expected_Revenue_LKR, 0.0) as Expected_Revenue_LKR,
+                   COALESCE(a.Revenue_ROI, 0.0) as Revenue_ROI
             FROM outlets o
             LEFT JOIN allocations a ON o.Outlet_ID = a.Outlet_ID
             WHERE o.Outlet_ID = ?

@@ -62,6 +62,14 @@ EARTH_RADIUS_M = 6371000.0
 SIGMA_M = 300.0  # Gaussian decay sigma
 SEARCH_RADIUS_M = 1000.0  # 1 km search radius
 
+# Minimum records required — pipeline fails if OSM data is missing or unusable (no synthetic fallback).
+MIN_RAW_OSM_ELEMENTS = 500
+MIN_PARSED_POI_RECORDS = 1000
+
+
+class POIDataError(RuntimeError):
+    """Raised when OpenStreetMap POI data cannot be loaded or parsed."""
+
 # POI Category configuration with Overpass filters
 POI_CATEGORIES = {
     "school": 'node["amenity"~"school|college|university|kindergarten"]',
@@ -122,47 +130,77 @@ def query_overpass_all_sri_lanka() -> List[Dict]:
     bbox = "5.9,79.5,9.9,82.0"
     
     # Construct combined query for nodes and ways (out center gives centers for ways)
-    query_body = f"""
-    [out:json][timeout:240];
-    (
-      node["amenity"~"school|college|university|kindergarten"]({bbox});
-      way["amenity"~"school|college|university|kindergarten"]({bbox});
-      node["highway"="bus_stop"]({bbox});
-      node["amenity"="bus_station"]({bbox});
-      way["amenity"="bus_station"]({bbox});
-      node["amenity"~"hospital|clinic|doctors|pharmacy"]({bbox});
-      way["amenity"~"hospital|clinic|doctors|pharmacy"]({bbox});
-      node["tourism"~"attraction|hotel|museum|viewpoint|zoo|theme_park"]({bbox});
-      way["tourism"~"attraction|hotel|museum|viewpoint|zoo|theme_park"]({bbox});
-      node["shop"~"supermarket|convenience|mall|department_store|grocery|general"]({bbox});
-      way["shop"~"supermarket|convenience|mall|department_store|grocery|general"]({bbox});
-      node["amenity"="place_of_worship"]({bbox});
-      way["amenity"="place_of_worship"]({bbox});
-      node["amenity"="fuel"]({bbox});
-      way["amenity"="fuel"]({bbox});
-      node["amenity"~"restaurant|cafe|bar|fast_food|food_court"]({bbox});
-      way["amenity"~"restaurant|cafe|bar|fast_food|food_court"]({bbox});
-      node["amenity"~"bank|atm"]({bbox});
-      way["amenity"~"bank|atm"]({bbox});
-    );
-    out center;
-    """
-    
-    overpass_url = "https://overpass-api.de/api/interpreter"
-    try:
-        resp = requests.post(overpass_url, data={"data": query_body}, timeout=300)
-        resp.raise_for_status()
-        elements = resp.json().get("elements", [])
-        logger.info(f"Successfully scraped {len(elements):,} raw POIs from Overpass API.")
-        
-        # Cache raw response
-        with open(cache_file, "w", encoding="utf-8") as f:
-            json.dump(elements, f, ensure_ascii=False, indent=2)
-            
-        return elements
-    except Exception as e:
-        logger.error(f"Overpass API scraping failed: {e}. Falling back to synthetic generator.")
-        return []
+    query_body = f"""[out:json][timeout:240];
+(
+  node["amenity"~"school|college|university|kindergarten"]({bbox});
+  way["amenity"~"school|college|university|kindergarten"]({bbox});
+  node["highway"="bus_stop"]({bbox});
+  node["amenity"="bus_station"]({bbox});
+  way["amenity"="bus_station"]({bbox});
+  node["amenity"~"hospital|clinic|doctors|pharmacy"]({bbox});
+  way["amenity"~"hospital|clinic|doctors|pharmacy"]({bbox});
+  node["tourism"~"attraction|hotel|museum|viewpoint|zoo|theme_park"]({bbox});
+  way["tourism"~"attraction|hotel|museum|viewpoint|zoo|theme_park"]({bbox});
+  node["shop"~"supermarket|convenience|mall|department_store|grocery|general"]({bbox});
+  way["shop"~"supermarket|convenience|mall|department_store|grocery|general"]({bbox});
+  node["amenity"="place_of_worship"]({bbox});
+  way["amenity"="place_of_worship"]({bbox});
+  node["amenity"="fuel"]({bbox});
+  way["amenity"="fuel"]({bbox});
+  node["amenity"~"restaurant|cafe|bar|fast_food|food_court"]({bbox});
+  way["amenity"~"restaurant|cafe|bar|fast_food|food_court"]({bbox});
+  node["amenity"~"bank|atm"]({bbox});
+  way["amenity"~"bank|atm"]({bbox});
+);
+out center;"""
+
+    headers = {
+        "User-Agent": "DataStorm-2026-AI-ACES/1.0 (latent-demand-pipeline)",
+        "Accept": "application/json",
+    }
+    endpoints = [
+        "https://overpass.kumi.systems/api/interpreter",
+        "https://lz4.overpass-api.de/api/interpreter",
+        "https://overpass-api.de/api/interpreter",
+    ]
+
+    last_error: Optional[Exception] = None
+    for endpoint in endpoints:
+        for attempt in range(1, 4):
+            try:
+                logger.info(f"Overpass request -> {endpoint} (attempt {attempt}/3)")
+                resp = requests.post(
+                    endpoint,
+                    data={"data": query_body},
+                    headers=headers,
+                    timeout=300,
+                )
+                resp.raise_for_status()
+                elements = resp.json().get("elements", [])
+                logger.info(f"Successfully scraped {len(elements):,} raw POIs from {endpoint}.")
+
+                if len(elements) < MIN_RAW_OSM_ELEMENTS:
+                    raise POIDataError(
+                        f"Overpass returned only {len(elements)} elements (minimum {MIN_RAW_OSM_ELEMENTS}). "
+                        "Refusing to continue with insufficient OSM coverage."
+                    )
+
+                with open(cache_file, "w", encoding="utf-8") as f:
+                    json.dump(elements, f, ensure_ascii=False)
+                logger.info(f"Cached raw OSM response to {cache_file}")
+                return elements
+            except POIDataError:
+                raise
+            except Exception as e:
+                last_error = e
+                logger.warning(f"Overpass attempt failed ({endpoint}): {e}")
+                time.sleep(min(5 * attempt, 15))
+
+    raise POIDataError(
+        f"All Overpass endpoints failed. Last error: {last_error}. "
+        f"Ensure network access or place a valid cache at {cache_file}. "
+        "Synthetic POI generation is disabled."
+    ) from last_error
 
 def classify_poi_element(el: Dict) -> List[str]:
     """Classify an OSM element into one or more of our POI categories based on its tags."""
@@ -217,14 +255,23 @@ def classify_poi_element(el: Dict) -> List[str]:
     return categories
 
 def extract_pois_dataframe(elements: List[Dict], outlet_coords: pd.DataFrame) -> pd.DataFrame:
-    """Parse raw elements from Overpass, structure into a DataFrame, or trigger fallback."""
+    """Parse raw Overpass elements into a categorized POI DataFrame.
+
+    Raises POIDataError if parsing yields insufficient records. No synthetic fallback.
+    """
+    if not elements:
+        raise POIDataError(
+            "No Overpass elements to parse. Run with network access to fetch OSM data, "
+            f"or provide cache: {POI_CACHE / 'raw_sri_lanka_pois.json'}"
+        )
+
     records = []
     for el in elements:
         lat = el.get("lat") or el.get("center", {}).get("lat")
         lon = el.get("lon") or el.get("center", {}).get("lon")
         if lat is None or lon is None:
             continue
-            
+
         cats = classify_poi_element(el)
         for cat in cats:
             records.append({
@@ -232,51 +279,25 @@ def extract_pois_dataframe(elements: List[Dict], outlet_coords: pd.DataFrame) ->
                 "lon": float(lon),
                 "category": cat
             })
-            
-    if records:
-        poi_df = pd.DataFrame(records)
-        logger.info(f"Parsed {len(poi_df):,} POI records across {poi_df['category'].nunique()} categories.")
-        return poi_df
-        
-    # --- FALLBACK GENERATOR ---
-    logger.warning("No POI records parsed. Running high-fidelity local competitor/POI generator using outlet coordinates...")
-    fallback_records = []
-    
-    # 1. Use existing Groceries and SMMT outlets in Sri Lanka as competitors and markets
-    outlets_master = pd.read_parquet(SILVER / "outlet_master.parquet")
-    coords_master = pd.read_parquet(SILVER / "outlet_coordinates.parquet")
-    merged_meta = coords_master.merge(outlets_master, on="Outlet_ID", how="inner")
-    
-    # Identify competitor outlets (Grocery & SMMT)
-    competitor_outlets = merged_meta[merged_meta["Outlet_Type"].isin(["Grocery", "SMMT"])]
-    for _, row in competitor_outlets.iterrows():
-        # Add actual competitor POI
-        fallback_records.append({"lat": row["Latitude"], "lon": row["Longitude"], "category": "competitor"})
-        fallback_records.append({"lat": row["Latitude"], "lon": row["Longitude"], "category": "market"})
-        
-    # 2. Add randomly distributed POIs around outlets to serve as schools, bus stops, hospitals, etc.
-    # This ensures spatial feature distributions closely match real-world distributions.
-    np.random.seed(42)
-    categories_to_gen = ["school", "bus_stop", "hospital", "tourism", "place_worship", "fuel_station", "restaurant", "bank_atm"]
-    
-    for _, row in merged_meta.sample(frac=0.6, random_state=42).iterrows():
-        base_lat = row["Latitude"]
-        base_lon = row["Longitude"]
-        # Generate 1 to 3 POIs in the vicinity
-        for _ in range(np.random.randint(1, 4)):
-            # Random offset (approx 50m to 800m)
-            offset_lat = np.random.normal(0, 0.003)
-            offset_lon = np.random.normal(0, 0.003)
-            cat = np.random.choice(categories_to_gen)
-            fallback_records.append({
-                "lat": base_lat + offset_lat,
-                "lon": base_lon + offset_lon,
-                "category": cat
-            })
-            
-    fallback_df = pd.DataFrame(fallback_records)
-    logger.info(f"Generated {len(fallback_df):,} synthetic POI features to ensure pipeline integrity.")
-    return fallback_df
+
+    if len(records) < MIN_PARSED_POI_RECORDS:
+        raise POIDataError(
+            f"Only {len(records)} POI records parsed (minimum {MIN_PARSED_POI_RECORDS}). "
+            "OSM response may be incomplete — re-run Overpass fetch or refresh cache."
+        )
+
+    poi_df = pd.DataFrame(records)
+    logger.info(f"Parsed {len(poi_df):,} POI records across {poi_df['category'].nunique()} categories.")
+    return poi_df
+
+
+def save_osm_competitor_locations(poi_df: pd.DataFrame) -> Path:
+    """Persist real OSM retail competitor coordinates for the web map layer."""
+    comp_df = poi_df.loc[poi_df["category"] == "competitor", ["lat", "lon"]].drop_duplicates()
+    out_path = POI_CACHE / "osm_competitor_pois.parquet"
+    comp_df.to_parquet(out_path, index=False)
+    logger.info(f"Saved {len(comp_df):,} OSM competitor map points to {out_path}")
+    return out_path
 
 def tune_gravity_beta(
     outlets_df: pd.DataFrame,
@@ -409,7 +430,8 @@ def main():
     # 2. Fetch and parse POI elements
     raw_elements = query_overpass_all_sri_lanka()
     poi_df = extract_pois_dataframe(raw_elements, outlets_df)
-    
+    save_osm_competitor_locations(poi_df)
+
     # 3. Project to 3D Cartesian coordinates for rapid cKDTree radius matching
     c_radius_3d = 2.0 * np.sin(SEARCH_RADIUS_M / (2.0 * EARTH_RADIUS_M))
     poi_cart = latlon_to_cartesian(poi_df["lat"].values, poi_df["lon"].values)

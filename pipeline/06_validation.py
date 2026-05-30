@@ -21,6 +21,16 @@ from sklearn.ensemble import HistGradientBoostingRegressor
 import lightgbm as lgb
 import matplotlib.pyplot as plt
 
+# Ensure pipeline folder is in path for direct execution
+sys.path.append(str(Path(__file__).parent))
+
+from latent_heuristic import (
+    compute_heuristic_potential,
+    finalize_latent_predictions,
+    ensure_heuristic_inputs,
+    HIGH_CENSORING_THRESHOLD,
+)
+
 # Suppress warnings
 warnings.filterwarnings("ignore")
 plt.style.use("seaborn-v0_8-whitegrid")
@@ -81,147 +91,9 @@ LGB_PARAMS = {
 }
 
 # ---------------------------------------------------------------------------
-# Vectorized Feature Builder (aligned with 04_gold_features_model.py)
+# Vectorized Feature Builder (imported from shared feature_builder)
 # ---------------------------------------------------------------------------
-def build_outlet_features(monthly: pd.DataFrame, target_month: int = 1) -> pd.DataFrame:
-    df = monthly.copy().sort_values(["Outlet_ID", "Year", "Month"])
-    gp = df.groupby("Outlet_ID")
-
-    hist_mean_vol = gp["monthly_volume"].mean()
-    hist_median_vol = gp["monthly_volume"].median()
-    hist_max_vol = gp["monthly_volume"].max()
-    hist_p75_vol = gp["monthly_volume"].quantile(0.75)
-    hist_p90_vol = gp["monthly_volume"].quantile(0.90)
-    hist_std_vol = gp["monthly_volume"].std(ddof=0).fillna(0)
-    hist_months = gp["monthly_volume"].count()
-    hist_cv = hist_std_vol / (hist_mean_vol + 1e-9)
-
-    # 1. Censoring flags
-    df["monthly_volume_sq"] = df["monthly_volume"].pow(2)
-    # Vectorized shift-based rolling 3-month mean
-    mask3 = (df["Outlet_ID"] == df["Outlet_ID"].shift(2))
-    roll3_mean = (df["monthly_volume"] + df["monthly_volume"].shift(1) + df["monthly_volume"].shift(2)) / 3.0
-    roll3_mean = pd.Series(np.where(mask3, roll3_mean, np.nan), index=df.index)
-    roll3_mean_sq = (df["monthly_volume_sq"] + df["monthly_volume_sq"].shift(1) + df["monthly_volume_sq"].shift(2)) / 3.0
-    roll3_mean_sq = pd.Series(np.where(mask3, roll3_mean_sq, np.nan), index=df.index)
-    roll3_std = np.sqrt(np.clip(roll3_mean_sq - np.square(roll3_mean), 0.0, None))
-    roll3_cv = roll3_std / (roll3_mean + 1e-9)
-    df["plateau_flag"] = (roll3_cv < 0.10).astype(float)
-    df.loc[df["Outlet_ID"].isin(hist_months[hist_months < 3].index), "plateau_flag"] = np.nan
-    cens_plateau = df.groupby("Outlet_ID")["plateau_flag"].mean().fillna(0.0)
-
-    df["at_cap_flag"] = (
-        np.abs(df["monthly_volume"] - df["dist_month_median"])
-        / (df["dist_month_median"] + 1e-9) < 0.15
-    ).astype(float)
-    cens_dist_cap = df.groupby("Outlet_ID")["at_cap_flag"].mean().fillna(0.0)
-
-    yearly = df.groupby(["Outlet_ID", "Year"])["monthly_volume"].mean().reset_index().sort_values(["Outlet_ID", "Year"])
-    yearly["growth"] = yearly.groupby("Outlet_ID")["monthly_volume"].pct_change()
-    yearly["stagnation_flag"] = np.where(yearly["growth"].isna(), np.nan, (np.abs(yearly["growth"]) < 0.05).astype(float))
-    cens_stagnation = yearly.groupby("Outlet_ID")["stagnation_flag"].mean().fillna(0.0)
-    yoy_growth = yearly.groupby("Outlet_ID")["growth"].mean().fillna(0.0).clip(-0.30, 0.50)
-
-    cens_cv_score = ((0.30 - hist_cv) / 0.30).clip(lower=0.0)
-
-    df["q4_vol"] = np.where(df["Month"].isin([10, 11, 12]), df["monthly_volume"], np.nan)
-    q4_mean = df.groupby("Outlet_ID")["q4_vol"].mean()
-    q4_count = df.groupby("Outlet_ID")["q4_vol"].count()
-    q4_prem = q4_mean / (hist_mean_vol + 1e-9) - 1.0
-    cens_q4_raw = (-q4_prem * 2.0).clip(0.0, 1.0).fillna(0.0)
-    cens_q4_suppression = pd.Series(np.where(q4_count >= 2, cens_q4_raw, 0.0), index=hist_mean_vol.index)
-
-    censoring_score = (
-        0.30 * cens_plateau
-        + 0.25 * cens_dist_cap
-        + 0.20 * cens_stagnation
-        + 0.15 * cens_cv_score
-        + 0.10 * cens_q4_suppression
-    ).clip(0.0, 1.0)
-
-    # Proximity & variance
-    capacity_proximity_ratio = pd.Series(
-        np.clip(
-            np.where(
-                hist_months >= 3,
-                roll3_mean.groupby(df["Outlet_ID"]).mean() / (hist_max_vol + 1e-9),
-                hist_mean_vol / (hist_max_vol + 1e-9)
-            ), 0.0, 1.0
-        ), index=hist_mean_vol.index
-    )
-
-    # Vectorized shift-based rolling 6-month mean
-    mask6 = (df["Outlet_ID"] == df["Outlet_ID"].shift(5))
-    roll6_mean = (
-        df["monthly_volume"] + 
-        df["monthly_volume"].shift(1) + 
-        df["monthly_volume"].shift(2) + 
-        df["monthly_volume"].shift(3) + 
-        df["monthly_volume"].shift(4) + 
-        df["monthly_volume"].shift(5)
-    ) / 6.0
-    roll6_mean = pd.Series(np.where(mask6, roll6_mean, np.nan), index=df.index)
-    roll6_mean_sq = (
-        df["monthly_volume_sq"] + 
-        df["monthly_volume_sq"].shift(1) + 
-        df["monthly_volume_sq"].shift(2) + 
-        df["monthly_volume_sq"].shift(3) + 
-        df["monthly_volume_sq"].shift(4) + 
-        df["monthly_volume_sq"].shift(5)
-    ) / 6.0
-    roll6_mean_sq = pd.Series(np.where(mask6, roll6_mean_sq, np.nan), index=df.index)
-    roll6_std = np.sqrt(np.clip(roll6_mean_sq - np.square(roll6_mean), 0.0, None))
-    roll6_cv = roll6_std / (roll6_mean + 1e-9)
-    purchase_pace_variance = pd.Series(
-        np.where(hist_months >= 6, roll6_cv.groupby(df["Outlet_ID"]).mean(), hist_cv),
-        index=hist_mean_vol.index
-    )
-
-    dist_rank_mean = df.groupby("Outlet_ID")["dist_month_rank"].mean()
-    target_vols = df[df["Month"] == target_month]
-    target_mean = target_vols.groupby("Outlet_ID")["monthly_volume"].mean().reindex(hist_mean_vol.index).fillna(hist_mean_vol)
-
-    dist_sums = df.groupby(["Outlet_ID", "Distributor_ID"])["monthly_volume"].sum().reset_index()
-    primary_dist = dist_sums.sort_values("monthly_volume").groupby("Outlet_ID")["Distributor_ID"].last()
-
-    # Vectorized rolling median and maximum (min_periods=1)
-    m1 = (df["Outlet_ID"] == df["Outlet_ID"].shift(1))
-    m2 = (df["Outlet_ID"] == df["Outlet_ID"].shift(2))
-    c0 = df["monthly_volume"]
-    c1 = np.where(m1, df["monthly_volume"].shift(1), np.nan)
-    c2 = np.where(m2, df["monthly_volume"].shift(2), np.nan)
-    stacked = np.column_stack([c0, c1, c2])
-    roll_med_all = np.nanmedian(stacked, axis=1)
-    roll_max_all = np.nanmax(stacked, axis=1)
-    df_roll_med = pd.Series(roll_med_all, index=df.index)
-    df_roll_max = pd.Series(roll_max_all, index=df.index)
-    rolling_median = df_roll_med.groupby(df["Outlet_ID"]).last().reindex(hist_mean_vol.index)
-    rolling_maximum = df_roll_max.groupby(df["Outlet_ID"]).last().reindex(hist_mean_vol.index)
-
-    return pd.DataFrame({
-        "hist_mean_vol": hist_mean_vol,
-        "hist_median_vol": hist_median_vol,
-        "hist_max_vol": hist_max_vol,
-        "hist_p75_vol": hist_p75_vol,
-        "hist_p90_vol": hist_p90_vol,
-        "hist_std_vol": hist_std_vol,
-        "hist_cv": hist_cv,
-        "hist_months": hist_months,
-        "censoring_score": censoring_score,
-        "cens_plateau": cens_plateau,
-        "cens_dist_cap": cens_dist_cap,
-        "cens_stagnation": cens_stagnation,
-        "cens_cv_score": cens_cv_score,
-        "cens_q4_suppression": cens_q4_suppression,
-        "yoy_growth": yoy_growth,
-        "jan_hist_mean": target_mean,
-        "capacity_proximity_ratio": capacity_proximity_ratio,
-        "purchase_pace_variance": purchase_pace_variance,
-        "dist_rank_mean": dist_rank_mean,
-        "primary_dist": primary_dist,
-        "rolling_median": rolling_median,
-        "rolling_maximum": rolling_maximum
-    }).reset_index()
+from feature_builder import build_outlet_features
 
 def add_dist_stats(monthly: pd.DataFrame) -> pd.DataFrame:
     dist_med = monthly.groupby(["Distributor_ID", "Month"])["monthly_volume"].median().rename("dist_month_median").reset_index()
@@ -241,6 +113,15 @@ def build_training_panel_for_window(
     sorted_periods = sorted(train_periods)
     target_periods = sorted_periods[-n_train_targets:]
     
+    # Load holiday calendar for Priority 4
+    holiday_path = SILVER / "holiday_list.parquet"
+    holidays = None
+    if holiday_path.exists():
+        holidays = pd.read_parquet(holiday_path)
+        holidays["Date"] = pd.to_datetime(holidays["Date"])
+        holidays["Year"] = holidays["Date"].dt.year
+        holidays["Month"] = holidays["Date"].dt.month
+        
     records = []
     for p_idx in target_periods:
         yr, mo = p_idx // 12, p_idx % 12
@@ -284,6 +165,16 @@ def build_training_panel_for_window(
         feats = feats.merge(actual, on="Outlet_ID", how="inner")
         feats = feats[feats["actual_vol"] > 0].copy()
         feats["target_log_vol"] = np.log1p(feats["actual_vol"])
+        
+        # Holiday features (Priority 4)
+        if holidays is not None:
+            target_holidays = holidays[(holidays["Year"] == yr) & (holidays["Month"] == mo)]
+            holiday_count = len(target_holidays)
+        else:
+            holiday_count = 0
+        feats["jan_holiday_count"] = holiday_count
+        feats["high_holiday_month"] = int(holiday_count >= 3)
+        
         records.append(feats)
         
     if not records:
@@ -310,6 +201,15 @@ def main():
     outlet = pd.read_parquet(SILVER / "outlet_master.parquet")
     season = pd.read_parquet(SILVER / "distributor_seasonality.parquet")
     
+    # Load holiday calendar for Priority 4 in validation main
+    holiday_path = SILVER / "holiday_list.parquet"
+    holidays = None
+    if holiday_path.exists():
+        holidays = pd.read_parquet(holiday_path)
+        holidays["Date"] = pd.to_datetime(holidays["Date"])
+        holidays["Year"] = holidays["Date"].dt.year
+        holidays["Month"] = holidays["Date"].dt.month
+        
     poi_path = POI_CACHE / "poi_features.parquet"
     poi_df = pd.read_parquet(poi_path) if poi_path.exists() else pd.DataFrame()
     
@@ -407,7 +307,8 @@ def main():
             "market_saturation_index", "competition_dampener", "gravity_catchment_score",
             "market_accessibility", "population_proxy", "peer_efficiency_gap",
             "outlet_efficiency_index", "seasonality_strength", "local_peer_performance",
-            "regional_peer_performance", "hyperlocal_competition"
+            "regional_peer_performance", "hyperlocal_competition",
+            "jan_holiday_count", "high_holiday_month"
         ]
         feature_cols = [c for c in feature_cols if c in train_panel.columns]
         
@@ -463,6 +364,15 @@ def main():
             val_feats["size_factor"] = val_feats["Outlet_Size"].map(SIZE_POTENTIAL_FACTOR).fillna(1.0)
             val_feats["type_factor"] = val_feats["Outlet_Type"].map(TYPE_POTENTIAL_FACTOR).fillna(1.0)
             
+            # Holiday features for validation (Priority 4)
+            if holidays is not None:
+                target_holidays = holidays[(holidays["Year"] == yr) & (holidays["Month"] == mo)]
+                holiday_count = len(target_holidays)
+            else:
+                holiday_count = 0
+            val_feats["jan_holiday_count"] = holiday_count
+            val_feats["high_holiday_month"] = int(holiday_count >= 3)
+            
             if not poi_df.empty:
                 drop_cols = [c for c in ["poi_lat", "poi_lon", "Latitude", "Longitude"] if c in poi_df.columns]
                 val_feats = val_feats.merge(poi_df.drop(columns=drop_cols, errors="ignore"), on="Outlet_ID", how="left")
@@ -512,6 +422,15 @@ def main():
                 val_feats["jan_hist_mean"].notna() & (val_feats["jan_hist_mean"] > 0),
                 val_feats["hist_median_vol"]
             )
+
+            if "combined_catchment_score" not in val_feats.columns:
+                val_feats["combined_catchment_score"] = 0.0
+            else:
+                val_feats["combined_catchment_score"] = val_feats["combined_catchment_score"].fillna(0.0)
+            if "competition_dampener" not in val_feats.columns:
+                val_feats["competition_dampener"] = 1.0
+            else:
+                val_feats["competition_dampener"] = val_feats["competition_dampener"].fillna(1.0)
             
             actual_val = (
                 monthly[monthly["period_idx"] == p_val]
@@ -536,18 +455,24 @@ def main():
                 if X_val[c].dtype.name != 'category':
                     X_val[c] = X_val[c].fillna(0.0)
                     
-            # 1. Evaluate Heuristic Model
-            y_pred_heur = (
-                val_combined["jan_base"] *
-                val_combined["size_factor"] *
-                val_combined["type_factor"] *
-                val_combined["target_season_factor"] *
-                (1.0 + val_combined["censoring_score"] * 0.40) *
-                val_combined["peer_efficiency_gap"] *
-                (1.0 + val_combined["combined_catchment_score"] * 0.15) *
-                val_combined["competition_dampener"]
-            ).values
-            metrics_heur = compute_metrics(val_combined["actual"].values, y_pred_heur)
+            # 1. Primary latent heuristic (production model)
+            val_combined = ensure_heuristic_inputs(val_combined)
+            y_pred_heur = finalize_latent_predictions(
+                compute_heuristic_potential(val_combined), val_combined
+            )
+            y_actual = val_combined["actual"].values
+            metrics_heur = compute_metrics(y_actual, y_pred_heur)
+
+            # High-censoring outlets: where latent uplift claim matters most
+            high_cens_mask = val_combined["censoring_score"].values > HIGH_CENSORING_THRESHOLD
+            if np.sum(high_cens_mask) >= 30:
+                metrics_heur_hi = compute_metrics(y_actual[high_cens_mask], y_pred_heur[high_cens_mask])
+                fold_results.append({
+                    "fold": fold_idx + 1,
+                    "period": f"{yr}-{mo:02d}",
+                    "Model": "Heuristic_Latent (censoring>0.4)",
+                    **metrics_heur_hi,
+                })
             
             # 2. Evaluate Quantile Regressor
             hgb_qr = HistGradientBoostingRegressor(loss="quantile", quantile=0.90, max_iter=200, random_state=42)
@@ -570,7 +495,7 @@ def main():
             metrics_lgb = compute_metrics(val_combined["actual"].values, y_pred_lgb)
             
             # Record
-            fold_results.append({"fold": fold_idx+1, "period": f"{yr}-{mo:02d}", "Model": "Heuristic", **metrics_heur})
+            fold_results.append({"fold": fold_idx+1, "period": f"{yr}-{mo:02d}", "Model": "Heuristic_Latent", **metrics_heur})
             fold_results.append({"fold": fold_idx+1, "period": f"{yr}-{mo:02d}", "Model": "Quantile Regressor", **metrics_hgb})
             fold_results.append({"fold": fold_idx+1, "period": f"{yr}-{mo:02d}", "Model": "LightGBM Quantile", **metrics_lgb})
             
@@ -597,7 +522,7 @@ def main():
     # 9. Plot Validation Curves
     fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
     
-    models = ["Heuristic", "Quantile Regressor", "LightGBM Quantile"]
+    models = ["Heuristic_Latent", "Quantile Regressor", "LightGBM Quantile"]
     colors = ["#1f77b4", "#2ca02c", "#d62728"]
     
     for model, clr in zip(models, colors):

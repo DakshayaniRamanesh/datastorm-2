@@ -71,7 +71,10 @@
                 </div>
                 <div class="kpi-sub">
                     {% if outlet.Trade_Spend_LKR > 0 %}
-                    <span class="text-success"><i class="fa-solid fa-chart-line me-1"></i> Expected Lift: +{{ outlet.Expected_Lift }} L</span>
+                    <span class="text-success"><i class="fa-solid fa-chart-line me-1"></i> Lift: +{{ outlet.Expected_Lift }} L</span>
+                    {% if outlet.Expected_Revenue_LKR > 0 %}
+                    <span class="ms-2 text-warning">Rev: LKR {{ "{:,.0f}".format(outlet.Expected_Revenue_LKR) }}</span>
+                    {% endif %}
                     {% else %}
                     <span>No allocation recommended</span>
                     {% endif %}

@@ -71,8 +71,20 @@
                         </div>
                         <div class="col-sm-6">
                             <div class="p-3 rounded" style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-glass);">
+                                <div class="text-muted small">Expected Revenue Lift</div>
+                                <div class="h4 font-weight-bold text-white mb-0" style="font-family: var(--font-outfit); color: var(--color-gold) !important;">LKR {{ "{:,.0f}".format(summary.total_revenue) }}</div>
+                            </div>
+                        </div>
+                        <div class="col-sm-6">
+                            <div class="p-3 rounded" style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-glass);">
+                                <div class="text-muted small">Average Revenue ROI</div>
+                                <div class="h4 font-weight-bold text-white mb-0" style="font-family: var(--font-outfit); color: var(--color-blue) !important;">{{ "%.4f" | format(summary.avg_revenue_roi) }} LKR/LKR</div>
+                            </div>
+                        </div>
+                        <div class="col-sm-6">
+                            <div class="p-3 rounded" style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-glass);">
                                 <div class="text-muted small">Average Volume Lift ROI</div>
-                                <div class="h4 font-weight-bold text-white mb-0" style="font-family: var(--font-outfit); color: var(--color-blue) !important;">{{ "%.6f" | format(summary.avg_roi) }} L/LKR</div>
+                                <div class="h5 font-weight-bold text-white mb-0" style="font-family: var(--font-outfit);">{{ "%.6f" | format(summary.avg_roi) }} L/LKR</div>
                             </div>
                         </div>
                     </div>
@@ -115,7 +127,9 @@
                         <th>Potential Opportunity Gap</th>
                         <th>Trade Spend Recommendation</th>
                         <th>Expected Lift</th>
+                        <th>Expected Revenue</th>
                         <th>ROI (L/LKR)</th>
+                        <th>Revenue ROI</th>
                     </tr>
                 </thead>
                 <tbody>
@@ -129,7 +143,9 @@
                         <td>{{ "{:,.1f}".format(a.potential_gap) }} L</td>
                         <td><span class="text-success font-weight-bold">LKR {{ "{:,.2f}".format(a.Trade_Spend_LKR) }}</span></td>
                         <td><strong>{{ "{:,.1f}".format(a.Expected_Lift) }} L</strong></td>
+                        <td><span class="text-warning font-weight-bold">LKR {{ "{:,.0f}".format(a.Expected_Revenue_LKR) }}</span></td>
                         <td><span class="text-muted">{{ "%.6f" | format(a.ROI) }}</span></td>
+                        <td><span class="text-success">{{ "%.4f" | format(a.Revenue_ROI) }}</span></td>
                     </tr>
                     {% endfor %}
                 </tbody>

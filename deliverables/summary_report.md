@@ -35,6 +35,8 @@ We utilized the **Overpass API (OpenStreetMap)** to dynamically scrape Points of
 ### 3. Causal Base Logic & Methodology
 The core challenge was solving the **left-censored demand curve**.
 
+**Production model (Option A):** Submissions use the **interpretable latent heuristic** (`pipeline/latent_heuristic.py`), not an auto-selected ML regressor. Quantile LightGBM/HGB models are trained on observed monthly volume **only as benchmarks** to compare fit quality on censored sales; they do not define `Maximum_Monthly_Liters`.
+
 #### 3.1 The Censoring Score (The "Uncapping" Signal)
 We moved beyond simple "hits-max" logic to a 5-signal composite score to identify capped demand:
 1.  **Plateau Detection:** Run of months with CV < 10% indicates the outlet is "stuck" at a ceiling.
@@ -44,12 +46,13 @@ We moved beyond simple "hits-max" logic to a 5-signal composite score to identif
 5.  **Q4 Suppression:** Lack of seasonal uplift in beverage-heavy Q4 months.
 
 #### 3.2 Maximum Potential Calculation
-We used a **Probabilistic Ceiling Estimation** approach:
-$$Potential = Base \times Multiplier \times Seasonality \times Growth$$
+Multiplicative latent heuristic (implemented in code):
 
-*   **SFA Proxy:** We applied Stochastic Frontier Analysis logic to calculate the "Efficiency Gap" between an outlet and the top 10% performers in its specific segment (Type + Size + Region).
-*   **Multiplier:** The base potential was uplifted based on the **Censoring Score**, **POI Catchment Score**, and **SFA Efficiency Gap**.
-*   **Ceiling Cap:** We applied a logical hard cap of 5.0x historical median to prevent wild extrapolations.
+$$Potential = B_{jan} \cdot f_{size} \cdot f_{type} \cdot f_{season} \cdot (1 + 0.40 \cdot S_{censor}) \cdot g_{peer} \cdot (1 + 0.15 \cdot C_{catch}) \cdot \delta_{comp}$$
+
+*   **Peer gap** \(g_{peer}\): ratio of segment p90 median volume to outlet median (clipped 1–3), not full SFA/Tobit estimation.
+*   **Catchment** \(C_{catch}\): OSM-derived combined catchment score (real Overpass data; synthetic POI disabled).
+*   **Ceiling:** Hard cap at 5× `jan_base`; minimum floor vs historical median; extra uplift when \(S_{censor} > 0.40\).
 
 ---
 
