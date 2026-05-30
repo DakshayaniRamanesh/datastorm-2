@@ -1,0 +1,44 @@
+{
+  "run_timestamp": "2026-05-30T12:18:47.703749+00:00",
+  "pipeline_stage": "Silver",
+  "datasets": [
+    {
+      "dataset": "transactions",
+      "total_rows": 2376389,
+      "rejected_rows": 128541,
+      "clean_rows": 2247848,
+      "rejection_rate_%": 5.4091
+    },
+    {
+      "dataset": "outlet_master",
+      "total_rows": 20000,
+      "rejected_rows": 0,
+      "clean_rows": 20000,
+      "rejection_rate_%": 0.0
+    },
+    {
+      "dataset": "outlet_coordinates",
+      "total_rows": 20000,
+      "rejected_rows": 240,
+      "clean_rows": 19760,
+      "rejection_rate_%": 1.2
+    },
+    {
+      "dataset": "distributor_seasonality",
+      "total_rows": 360,
+      "rejected_rows": 0,
+      "clean_rows": 360,
+      "rejection_rate_%": 0.0
+    },
+    {
+      "dataset": "holiday_list",
+      "total_rows": 349,
+      "rejected_rows": 273,
+      "clean_rows": 76,
+      "rejection_rate_%": 78.2235
+    }
+  ],
+  "total_rows_all_datasets": 2417098,
+  "total_rejected_all_datasets": 129054,
+  "overall_rejection_rate_%": 5.3392
+}

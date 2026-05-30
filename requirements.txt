@@ -1,0 +1,30 @@
+# DataStorm 2026 - Dependency Lockfile
+# Generated: 2026-05-16
+# Python 3.10+
+
+# Core data processing
+pandas>=2.0.0
+numpy>=1.24.0
+pyarrow>=14.0.0
+
+# Scientific / statistical computing
+scipy>=1.11.0
+
+# Machine learning (validation)
+scikit-learn>=1.3.0
+
+# Geospatial
+h3>=3.7.6
+
+# Visualization
+matplotlib>=3.7.0
+seaborn>=0.12.0
+
+# API / networking
+requests>=2.31.0
+
+# Overpass (OSM) optional helper
+overpy>=0.7
+
+# Utilities
+tqdm>=4.65.0

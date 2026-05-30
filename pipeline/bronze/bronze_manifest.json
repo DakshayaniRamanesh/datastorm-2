@@ -1,0 +1,30 @@
+{
+  "run_timestamp": "2026-05-30T12:18:30.084918+00:00",
+  "datasets": [
+    {
+      "dataset": "transactions",
+      "rows": 2376389,
+      "issues": []
+    },
+    {
+      "dataset": "outlet_master",
+      "rows": 20000,
+      "issues": []
+    },
+    {
+      "dataset": "outlet_coordinates",
+      "rows": 20000,
+      "issues": []
+    },
+    {
+      "dataset": "distributor_seasonality",
+      "rows": 360,
+      "issues": []
+    },
+    {
+      "dataset": "holiday_list",
+      "rows": 349,
+      "issues": []
+    }
+  ]
+}
