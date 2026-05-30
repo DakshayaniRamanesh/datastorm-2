@@ -1,0 +1,102 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>ACES Outlet Intelligence Platform</title>
+    
+    <!-- Bootstrap 5 CSS -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/css/bootstrap.min.css" rel="stylesheet">
+    
+    <!-- FontAwesome Icons -->
+    <link href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.4.2/css/all.min.css" rel="stylesheet">
+    
+    <!-- Leaflet CSS & JS -->
+    <link rel="stylesheet" href="https://unpkg.com/leaflet@1.9.4/dist/leaflet.css" />
+    <script src="https://unpkg.com/leaflet@1.9.4/dist/leaflet.js"></script>
+    
+    <!-- Leaflet Heatmap Plugin -->
+    <script src="https://cdn.jsdelivr.net/npm/leaflet.heat@0.2.0/dist/leaflet-heat.js"></script>
+    
+    <!-- Plotly JS -->
+    <script src="https://cdn.plot.ly/plotly-2.24.1.min.js"></script>
+    
+    <!-- Custom CSS -->
+    <link rel="stylesheet" href="{{ url_for('static', filename='css/styles.css') }}">
+</head>
+<body>
+
+    <!-- Sidebar Navigation -->
+    <div class="sidebar">
+        <div class="brand">
+            <i class="fa-solid fa-satellite-dish"></i>
+            <span>OUTLET INTEL</span>
+        </div>
+        
+        <ul class="nav-menu">
+            <li class="nav-item {% if active_page == 'dashboard' %}active{% endif %}">
+                <a href="{{ url_for('dashboard.view_dashboard') }}" class="nav-link">
+                    <i class="fa-solid fa-chart-pie"></i>
+                    <span>Dashboard</span>
+                </a>
+            </li>
+            <li class="nav-item {% if active_page == 'outlets' %}active{% endif %}">
+                <a href="{{ url_for('outlets.view_outlets') }}" class="nav-link">
+                    <i class="fa-solid fa-store"></i>
+                    <span>Outlets Explorer</span>
+                </a>
+            </li>
+            <li class="nav-item {% if active_page == 'optimizer' %}active{% endif %}">
+                <a href="{{ url_for('optimizer.view_optimizer') }}" class="nav-link">
+                    <i class="fa-solid fa-wallet"></i>
+                    <span>Budget Allocator</span>
+                </a>
+            </li>
+            <li class="nav-item {% if active_page == 'xai' %}active{% endif %}">
+                <a href="{{ url_for('xai.view_xai') }}" class="nav-link">
+                    <i class="fa-solid fa-brain"></i>
+                    <span>Explainable AI</span>
+                </a>
+            </li>
+            <li class="nav-item {% if active_page == 'reports' %}active{% endif %}">
+                <a href="{{ url_for('xai.view_reports') }}" class="nav-link">
+                    <i class="fa-solid fa-file-contract"></i>
+                    <span>Validation Reports</span>
+                </a>
+            </li>
+        </ul>
+        
+        <div class="mt-auto pt-4" style="border-top: 1px solid var(--border-glass);">
+            <div class="d-flex align-items-center gap-2 px-2">
+                <i class="fa-solid fa-shield-halved text-success"></i>
+                <div style="font-size: 11px;">
+                    <div class="text-white font-weight-bold">Team AI ACES</div>
+                    <div class="text-muted">Enterprise Platform</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Main Workspace -->
+    <div class="main-content">
+        <!-- Toast Flash Alerts -->
+        {% with messages = get_flashed_messages(with_categories=true) %}
+            {% if messages %}
+                <div class="container-fluid mb-4 p-0">
+                    {% for category, msg in messages %}
+                        <div class="alert alert-{{ category if category != 'error' else 'danger' }} alert-dismissible fade show glass-panel text-white" role="alert" style="background: rgba(22, 29, 49, 0.9);">
+                            {{ msg }}
+                            <button type="button" class="btn-close btn-close-white" data-bs-dismiss="alert" aria-label="Close"></button>
+                        </div>
+                    {% endfor %}
+                </div>
+            {% endif %}
+        {% endwith %}
+
+        {% block content %}{% endblock %}
+    </div>
+
+    <!-- Bootstrap 5 Bundle JS -->
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.2/dist/js/bootstrap.bundle.min.js"></script>
+</body>
+</html>

@@ -1,0 +1,194 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="container-fluid p-0">
+    <!-- Header -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h2 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 700;">Outlet Explorer</h1>
+            <p class="text-muted mb-0">Browse, filter, and audit outlets, demand potential, and local competitor indexes.</p>
+        </div>
+        <div>
+            <span class="badge-glass badge-blue"><i class="fa-solid fa-layer-group me-1"></i> Total Records: {{ "{:,}".format(total_count) }}</span>
+        </div>
+    </div>
+
+    <!-- Filter Form Panel -->
+    <div class="glass-panel p-4 mb-4">
+        <form method="GET" action="{{ url_for('outlets.view_outlets') }}" class="row g-3">
+            <!-- Search bar -->
+            <div class="col-md-3">
+                <label class="form-label text-muted small font-weight-bold">Search Outlet ID</label>
+                <div class="input-group">
+                    <span class="input-group-text bg-transparent border-end-0" style="border: 1px solid var(--border-glass);"><i class="fa-solid fa-magnifying-glass text-muted"></i></span>
+                    <input type="text" name="search" class="form-control form-glass border-start-0 ps-0" placeholder="Search..." value="{{ search_query }}">
+                </div>
+            </div>
+            
+            <!-- Type filter -->
+            <div class="col-md-2">
+                <label class="form-label text-muted small font-weight-bold">Outlet Type</label>
+                <select name="type" class="form-select form-glass">
+                    <option value="">All Types</option>
+                    {% for t in filter_options.types %}
+                    <option value="{{ t }}" {% if selected_type == t %}selected{% endif %}>{{ t }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            
+            <!-- Size filter -->
+            <div class="col-md-2">
+                <label class="form-label text-muted small font-weight-bold">Outlet Size</label>
+                <select name="size" class="form-select form-glass">
+                    <option value="">All Sizes</option>
+                    {% for s in filter_options.sizes %}
+                    <option value="{{ s }}" {% if selected_size == s %}selected{% endif %}>{{ s }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            
+            <!-- Distributor filter -->
+            <div class="col-md-3">
+                <label class="form-label text-muted small font-weight-bold">Distributor Network</label>
+                <select name="distributor" class="form-select form-glass">
+                    <option value="">All Distributors</option>
+                    {% for d in filter_options.distributors %}
+                    <option value="{{ d }}" {% if selected_distributor == d %}selected{% endif %}>{{ d }}</option>
+                    {% endfor %}
+                </select>
+            </div>
+            
+            <!-- Submit/Reset buttons -->
+            <div class="col-md-2 d-flex align-items-end gap-2">
+                <button type="submit" class="btn-glass btn-blue w-100 justify-content-center text-white"><i class="fa-solid fa-filter me-1"></i> Apply</button>
+                <a href="{{ url_for('outlets.view_outlets') }}" class="btn-glass justify-content-center" title="Reset Filters"><i class="fa-solid fa-rotate-left"></i></a>
+            </div>
+        </form>
+    </div>
+
+    <!-- Outlets Grid Table -->
+    <div class="glass-panel p-4 mb-4">
+        <div class="table-responsive">
+            <table class="table-glass">
+                <thead>
+                    <tr>
+                        <th>Outlet ID</th>
+                        <th>Type</th>
+                        <th>Size</th>
+                        <th>Distributor</th>
+                        <th>Hist Median</th>
+                        <th>Predicted Potential</th>
+                        <th>Opportunity Gap</th>
+                        <th>Censoring</th>
+                        <th>Catchment</th>
+                        <th>Comp Saturation</th>
+                        <th>Budget Allocate</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if outlets %}
+                        {% for o in outlets %}
+                        <tr>
+                            <!-- ID -->
+                            <td>
+                                <a href="{{ url_for('outlets.view_outlet_detail', outlet_id=o.Outlet_ID) }}" class="text-white font-weight-bold" style="text-decoration: none;">
+                                    <i class="fa-solid fa-circle-chevron-right text-info me-1"></i> {{ o.Outlet_ID }}
+                                </a>
+                            </td>
+                            <!-- Type -->
+                            <td><span class="badge-glass badge-blue">{{ o.Outlet_Type }}</span></td>
+                            <!-- Size -->
+                            <td>{{ o.Outlet_Size }}</td>
+                            <!-- Distributor -->
+                            <td><span class="text-muted" style="font-size: 11px;">{{ o.primary_dist }}</span></td>
+                            <!-- Volume -->
+                            <td>{{ "{:,.1f}".format(o.hist_median_vol) }} L</td>
+                            <td><strong>{{ "{:,.1f}".format(o.Maximum_Monthly_Liters) }} L</strong></td>
+                            <!-- Opportunity Gap -->
+                            <td><span class="kpi-trend-up">+{{ "{:,.1f}".format(o.Maximum_Monthly_Liters - o.hist_median_vol) }} L</span></td>
+                            <!-- Censoring score -->
+                            <td>
+                                {% if o.censoring_score > 0.50 %}
+                                <span class="badge-glass badge-red">{{ "%.2f" | format(o.censoring_score) }}</span>
+                                {% elif o.censoring_score > 0.20 %}
+                                <span class="badge-glass badge-gold">{{ "%.2f" | format(o.censoring_score) }}</span>
+                                {% else %}
+                                <span class="badge-glass badge-green">{{ "%.2f" | format(o.censoring_score) }}</span>
+                                {% endif %}
+                            </td>
+                            <!-- Catchment score -->
+                            <td>
+                                {% if o.combined_catchment_score is defined and o.combined_catchment_score is not none %}
+                                {{ "%.2f" | format(o.combined_catchment_score) }}
+                                {% else %}
+                                0.00
+                                {% endif %}
+                            </td>
+                            <!-- Saturation index -->
+                            <td>
+                                {% if o.market_saturation_index is defined and o.market_saturation_index is not none %}
+                                    {% if o.market_saturation_index > 2.0 %}
+                                    <span class="text-danger"><i class="fa-solid fa-triangle-exclamation me-1"></i> Saturated</span>
+                                    {% else %}
+                                    <span class="text-muted">{{ "%.2f" | format(o.market_saturation_index) }}</span>
+                                    {% endif %}
+                                {% else %}
+                                <span class="text-muted">0.00</span>
+                                {% endif %}
+                            </td>
+                            <!-- Budget allocations -->
+                            <td>
+                                {% if o.Trade_Spend_LKR > 0 %}
+                                <span class="text-success font-weight-bold">LKR {{ "{:,.0f}".format(o.Trade_Spend_LKR) }}</span>
+                                {% else %}
+                                <span class="text-muted" style="font-size: 11px;">—</span>
+                                {% endif %}
+                            </td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr>
+                            <td colspan="11" class="text-center text-muted py-5">
+                                <i class="fa-solid fa-inbox fa-3x mb-3"></i>
+                                <div>No outlets found matching the search filters.</div>
+                            </td>
+                        </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Pagination Controls -->
+    {% if total_pages > 1 %}
+    <div class="d-flex justify-content-between align-items-center">
+        <div class="text-muted small">
+            Showing Page {{ page }} of {{ total_pages }}
+        </div>
+        
+        <nav aria-label="Page navigation">
+            <ul class="pagination mb-0 gap-2">
+                <!-- Previous Button -->
+                <li class="page-item {% if page == 1 %}disabled{% endif %}">
+                    <a class="btn-glass text-white py-1 px-3" href="{{ url_for('outlets.view_outlets', page=page-1, search=search_query, type=selected_type, size=selected_size, distributor=selected_distributor) }}">
+                        <i class="fa-solid fa-chevron-left me-1"></i> Prev
+                    </a>
+                </li>
+                
+                <!-- Page Indicator badge -->
+                <li class="d-flex align-items-center">
+                    <span class="badge-glass badge-blue font-weight-bold" style="font-size: 13px;">{{ page }} / {{ total_pages }}</span>
+                </li>
+                
+                <!-- Next Button -->
+                <li class="page-item {% if page == total_pages %}disabled{% endif %}">
+                    <a class="btn-glass text-white py-1 px-3" href="{{ url_for('outlets.view_outlets', page=page+1, search=search_query, type=selected_type, size=selected_size, distributor=selected_distributor) }}">
+                        Next <i class="fa-solid fa-chevron-right ms-1"></i>
+                    </a>
+                </li>
+            </ul>
+        </nav>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

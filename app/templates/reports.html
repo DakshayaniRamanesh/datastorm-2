@@ -1,0 +1,118 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="container-fluid p-0">
+    <!-- Header -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h2 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 700;">Model Validation & Benchmarks</h1>
+            <p class="text-muted mb-0">Review model cross-validation benchmarks, chronological holdouts, and validation curves.</p>
+        </div>
+        <div>
+            <span class="badge-glass badge-green"><i class="fa-solid fa-square-check me-1"></i> TimeSeriesSplit (5 Folds)</span>
+        </div>
+    </div>
+
+    {% if report_rows %}
+    <!-- Model Averages Panel -->
+    <div class="glass-panel p-4 mb-4">
+        <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Cross-Validation Averages Summary</h3>
+        <div class="table-responsive">
+            <table class="table-glass">
+                <thead>
+                    <tr>
+                        <th>Compared Model Type</th>
+                        <th>Mean MAE (Liters)</th>
+                        <th>Mean RMSE (Liters)</th>
+                        <th>Mean MAPE (%)</th>
+                        <th>Mean R² score</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for avg in averages %}
+                    <tr {% if avg.model == 'LightGBM' or avg.model == 'LightGBM Quantile' %}style="background: rgba(0, 168, 255, 0.05); font-weight: 600;"{% endif %}>
+                        <td>
+                            {% if avg.model == 'LightGBM' or avg.model == 'LightGBM Quantile' %}
+                            <i class="fa-solid fa-trophy text-gold me-2" style="color: var(--color-gold);"></i>
+                            {% endif %}
+                            {{ avg.model }}
+                        </td>
+                        <td>{{ "{:,.2f}".format(avg.mae) }} L</td>
+                        <td>{{ "{:,.2f}".format(avg.rmse) }} L</td>
+                        <td>
+                            {% if avg.model == 'LightGBM' or avg.model == 'LightGBM Quantile' %}
+                            <span class="text-success">{{ avg.mape }}%</span>
+                            {% else %}
+                            {{ avg.mape }}%
+                            {% endif %}
+                        </td>
+                        <td>{{ avg.r2 }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+
+    <!-- Main Images Row -->
+    <div class="row g-4 mb-4">
+        <div class="col-lg-6">
+            <div class="glass-panel p-4">
+                <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Walk-Forward Validation Curves</h3>
+                <img src="/output/validation_curves.png" class="img-fluid rounded" alt="Validation Curves" style="border: 1px solid var(--border-glass); width: 100%;">
+            </div>
+        </div>
+        <div class="col-lg-6">
+            <div class="glass-panel p-4">
+                <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Diagnostic Comparisons: Input vs Prediction</h3>
+                <img src="/output/comparison_analysis.png" class="img-fluid rounded" alt="Comparison Analysis Plots" style="border: 1px solid var(--border-glass); width: 100%;">
+            </div>
+        </div>
+    </div>
+
+    <!-- Detailed Folds Datatable -->
+    <div class="glass-panel p-4">
+        <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Detailed Cross-Fold Chronological Metrics</h3>
+        <div class="table-responsive">
+            <table class="table-glass">
+                <thead>
+                    <tr>
+                        <th>Fold Index</th>
+                        <th>Validation Period</th>
+                        <th>Model Name</th>
+                        <th>MAE (Liters)</th>
+                        <th>RMSE (Liters)</th>
+                        <th>MAPE (%)</th>
+                        <th>R² score</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for r in report_rows %}
+                    <tr>
+                        <td><span class="badge-glass badge-blue">Fold {{ r.fold }}</span></td>
+                        <td>{{ r.period }}</td>
+                        <td>{{ r.model }}</td>
+                        <td>{{ "{:,.2f}".format(r.mae) }} L</td>
+                        <td>{{ "{:,.2f}".format(r.rmse) }} L</td>
+                        <td>{{ r.mape }}%</td>
+                        <td>{{ r.r2 }}</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% else %}
+    <!-- Missing validation report card -->
+    <div class="glass-panel p-5 text-center text-muted">
+        <i class="fa-solid fa-triangle-exclamation fa-4x mb-3 text-warning"></i>
+        <h3 class="h5 text-white font-weight-bold mb-2">No Validation Report Found</h3>
+        <p class="small mb-4">You must execute the validation pipeline script to generate comparison reports and charts.</p>
+        <div style="font-size: 13px;">
+            Run this command on your terminal:
+            <code class="d-block bg-dark text-white p-2 rounded mt-2 border border-secondary">python run_pipeline.py --validate --compare</code>
+        </div>
+    </div>
+    {% endif %}
+</div>
+{% endblock %}

@@ -1,0 +1,90 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="container-fluid p-0">
+    <!-- Header -->
+    <div class="d-flex justify-content-between align-items-center mb-4">
+        <div>
+            <h1 class="h2 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 700;">Explainable AI (XAI) Model</h1>
+            <p class="text-muted mb-0">Understand the key drivers behind the machine learning model's predictions using Shapley values.</p>
+        </div>
+        <div>
+            <span class="badge-glass badge-blue"><i class="fa-solid fa-brain me-1"></i> SHAP Global Importance</span>
+        </div>
+    </div>
+
+    <!-- Main Chart Row -->
+    <div class="row g-4 mb-4">
+        <!-- Plotly Global Feature Importance -->
+        <div class="col-lg-8">
+            <div class="glass-panel p-4 h-100">
+                <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Global Feature Importance: Mean |SHAP Value| (Predictive Impact)</h3>
+                <div id="global-shap-chart" style="height: 480px; width: 100%;"></div>
+            </div>
+        </div>
+        
+        <!-- Explainer Card -->
+        <div class="col-lg-4">
+            <div class="glass-panel p-4 h-100 d-flex flex-column justify-content-between">
+                <div>
+                    <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">What are SHAP values?</h3>
+                    <p class="small text-muted" style="line-height: 1.6;">
+                        SHAP (SHapley Additive exPlanations) is a game-theoretic approach to explain the outputs of any machine learning model. It connects optimal allocation of credit with local explanations using classical Shapley values.
+                    </p>
+                    <p class="small text-muted" style="line-height: 1.6;">
+                        Each feature value acts as a "player" in a game where the prediction is the payout. SHAP values distribute the payout among the features fairly, according to their marginal contributions.
+                    </p>
+                    <hr style="border-top: 1px solid var(--border-glass);">
+                    <h4 class="h6 text-white font-weight-bold mb-2">How to read local waterfall charts:</h4>
+                    <ul class="small text-muted ps-3 mb-0" style="line-height: 1.6;">
+                        <li><strong class="text-success">Green values</strong> push the prediction upward (indicating high potential gaps, good catchments, or size factors).</li>
+                        <li><strong class="text-danger">Red values</strong> drag the prediction downward (indicating supply caps, low growth, or high local competition).</li>
+                        <li>The chart starts at the <strong>Base Value</strong> (average log prediction) and sums the steps to reach the final <strong>Prediction Log</strong>.</li>
+                    </ul>
+                </div>
+                <div class="mt-4">
+                    <a href="{{ url_for('outlets.view_outlets') }}" class="btn-glass btn-blue w-100 justify-content-center text-white py-2">
+                        <i class="fa-solid fa-search me-1"></i> Audit Outlet Profiles
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.addEventListener("DOMContentLoaded", function() {
+        const rawImportance = {{ importance | tojson }};
+        
+        // Reverse order so highest appears at the top of horizontal chart
+        const sorted = rawImportance.reverse();
+        
+        const labels = sorted.map(item => {
+            return item.feature
+                .replace(/_gaussian_score/g, '')
+                .replace(/_/g, ' ')
+                .replace(/\b\w/g, c => c.toUpperCase());
+        });
+        const values = sorted.map(item => item.mean_abs_shap);
+        
+        const trace = {
+            y: labels,
+            x: values,
+            type: 'bar',
+            orientation: 'h',
+            marker: { color: 'rgba(213, 0, 249, 0.45)', border: {color: '#d500f9', width: 1} }
+        };
+        
+        const layout = {
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            font: { color: '#9ca3af', family: 'Inter, sans-serif', size: 9 },
+            margin: { l: 180, r: 10, t: 10, b: 40 },
+            xaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'Mean Absolute SHAP Value (Log Odds Scale)' },
+            yaxis: { autonext: true }
+        };
+        
+        Plotly.newPlot('global-shap-chart', [trace], layout, {displayModeBar: false});
+    });
+</script>
+{% endblock %}

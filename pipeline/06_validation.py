@@ -1,115 +1,114 @@
 """
-OUT-OF-TIME VALIDATION - LightGBM Chronological Holdout Framework
-==================================================================
-Implements a strict out-of-time validation protocol for the LightGBM
-hybrid demand forecasting model to eliminate chronological data leakage.
+DataStorm 2026 - Out-of-Time Walk-Forward Validation
+===================================================
+Executes a strict out-of-time cross-validation protocol using TimeSeriesSplit.
+For each chronological split:
+  1. Computes historical features on the training window only (no leakage).
+  2. Evaluates the Heuristic, Quantile Regressor, and LightGBM Quantile models on identical holdout windows.
+  3. Records MAE, RMSE, MAPE, and R² metrics.
 
-APPROACH: TimeSeriesSplit + Out-of-Time Anchor Holdout
--------------------------------------------------------
-1. Aggregate transactions to monthly outlet level.
-2. Use sklearn TimeSeriesSplit (n_splits=6) to create sequential folds.
-3. For each fold:
-   a. Build features using only the training window (no leakage).
-   b. Train a LightGBM regressor on (features → log1p(volume)) pairs
-      within the training window (using multiple target months).
-   c. Build prediction features at the training window boundary and
-      predict volumes for the validation months.
-   d. Compare predictions to actual observed volumes.
-4. Final holdout: train up to Oct 2025, validate on Nov-Dec 2025.
-5. Report MAE, RMSE, MedAE and MAPE per fold and overall.
-
-Metrics are saved to output/validation_report.csv.
-
-Usage:
-    python pipeline/06_validation.py
+Saves metrics to output/validation_report.csv and plots curves to output/validation_curves.png.
 """
 
+import sys
+import logging
 import warnings
 import pandas as pd
 import numpy as np
 from pathlib import Path
 from sklearn.model_selection import TimeSeriesSplit
+from sklearn.ensemble import HistGradientBoostingRegressor
 import lightgbm as lgb
+import matplotlib.pyplot as plt
 
+# Suppress warnings
 warnings.filterwarnings("ignore")
+plt.style.use("seaborn-v0_8-whitegrid")
 
-ROOT     = Path(__file__).parent.parent
-SILVER   = ROOT / "pipeline" / "silver"
-GOLD_DIR = ROOT / "pipeline" / "gold"
-OUTPUT   = ROOT / "output"
+# Setup Logging
+logging.basicConfig(
+    level=logging.INFO,
+    format="%(asctime)s [%(levelname)s] %(message)s",
+    handlers=[logging.StreamHandler(sys.stdout)]
+)
+logger = logging.getLogger("ValidationFramework")
+
+# Paths
+ROOT = Path(__file__).parent.parent
+SILVER = ROOT / "pipeline" / "silver"
+POI_CACHE = ROOT / "pipeline" / "poi_cache"
+OUTPUT = ROOT / "output"
 OUTPUT.mkdir(parents=True, exist_ok=True)
 
-# ---------------------------------------------------------------------------
-# Configuration
-# ---------------------------------------------------------------------------
-N_SPLITS          = 6      # TimeSeriesSplit folds
-MIN_TRAIN_MONTHS  = 6      # minimum months required in a training window
-N_TRAIN_TARGETS   = 6      # how many trailing months to use as training labels per fold
-HOLDOUT_MONTHS    = [      # final out-of-time holdout (proxy for Jan 2026)
-    (2025, 11), (2025, 12)
-]
+# Configuration constants
+N_SPLITS = 5
+MIN_TRAIN_MONTHS = 12
+N_TRAIN_TARGETS = 6
 
 SEASONALITY_MULTIPLIER = {
-    "Favorable": 1.15, "Moderate": 1.00, "Un-Favorable": 0.88,
+    "Favorable": 1.15,
+    "Moderate": 1.00,
+    "Un-Favorable": 0.88,
+}
+
+SIZE_POTENTIAL_FACTOR = {
+    "Extra Large": 1.30,
+    "Large": 1.15,
+    "Medium": 1.00,
+    "Small": 0.88,
+}
+
+TYPE_POTENTIAL_FACTOR = {
+    "Grocery": 1.10,
+    "Hotel": 1.20,
+    "Pharmacy": 0.90,
+    "Kiosk": 0.85,
+    "Eatery": 1.05,
+    "Bakery": 0.95,
+    "SMMT": 1.25,
 }
 
 LGB_PARAMS = {
-    "objective":        "regression",
-    "metric":           "rmse",
-    "n_estimators":     400,
-    "learning_rate":    0.05,
-    "num_leaves":       31,
-    "min_child_samples":15,
-    "subsample":        0.8,
-    "colsample_bytree": 0.8,
-    "reg_alpha":        0.1,
-    "reg_lambda":       0.2,
-    "verbose":          -1,
-    "n_jobs":           -1,
-    "random_state":     42,
+    "objective": "quantile",
+    "alpha": 0.90,
+    "metric": "quantile",
+    "n_estimators": 250,
+    "learning_rate": 0.05,
+    "num_leaves": 31,
+    "verbose": -1,
+    "n_jobs": -1,
+    "random_state": 42,
 }
 
-
 # ---------------------------------------------------------------------------
-# Vectorised Feature Builder (mirrors 04_gold_features_model.py exactly)
+# Vectorized Feature Builder (aligned with 04_gold_features_model.py)
 # ---------------------------------------------------------------------------
-
 def build_outlet_features(monthly: pd.DataFrame, target_month: int = 1) -> pd.DataFrame:
-    """
-    Compute per-outlet historical features using fully vectorized pandas operations.
-    Mirrors the feature builder in 04_gold_features_model.py.
-    """
     df = monthly.copy().sort_values(["Outlet_ID", "Year", "Month"])
     gp = df.groupby("Outlet_ID")
 
-    hist_mean_vol   = gp["monthly_volume"].mean()
+    hist_mean_vol = gp["monthly_volume"].mean()
     hist_median_vol = gp["monthly_volume"].median()
-    hist_max_vol    = gp["monthly_volume"].max()
-    hist_p75_vol    = gp["monthly_volume"].quantile(0.75)
-    hist_p90_vol    = gp["monthly_volume"].quantile(0.90)
-    hist_std_vol    = gp["monthly_volume"].std(ddof=0).fillna(0)
-    hist_months     = gp["monthly_volume"].count()
-    hist_cv         = hist_std_vol / (hist_mean_vol + 1e-9)
+    hist_max_vol = gp["monthly_volume"].max()
+    hist_p75_vol = gp["monthly_volume"].quantile(0.75)
+    hist_p90_vol = gp["monthly_volume"].quantile(0.90)
+    hist_std_vol = gp["monthly_volume"].std(ddof=0).fillna(0)
+    hist_months = gp["monthly_volume"].count()
+    hist_cv = hist_std_vol / (hist_mean_vol + 1e-9)
 
+    # 1. Censoring flags
     df["monthly_volume_sq"] = df["monthly_volume"].pow(2)
-    
-    roll3_mean = (
-        df.groupby("Outlet_ID")["monthly_volume"]
-        .rolling(3, min_periods=3)
-        .mean()
-        .reset_index(level=0, drop=True)
-    )
-    roll3_mean_sq = (
-        df.groupby("Outlet_ID")["monthly_volume_sq"]
-        .rolling(3, min_periods=3)
-        .mean()
-        .reset_index(level=0, drop=True)
-    )
-    roll3_std     = np.sqrt((roll3_mean_sq - roll3_mean.pow(2)).clip(lower=0))
-    roll3_cv      = roll3_std / (roll3_mean + 1e-9)
+    # Vectorized shift-based rolling 3-month mean
+    mask3 = (df["Outlet_ID"] == df["Outlet_ID"].shift(2))
+    roll3_mean = (df["monthly_volume"] + df["monthly_volume"].shift(1) + df["monthly_volume"].shift(2)) / 3.0
+    roll3_mean = pd.Series(np.where(mask3, roll3_mean, np.nan), index=df.index)
+    roll3_mean_sq = (df["monthly_volume_sq"] + df["monthly_volume_sq"].shift(1) + df["monthly_volume_sq"].shift(2)) / 3.0
+    roll3_mean_sq = pd.Series(np.where(mask3, roll3_mean_sq, np.nan), index=df.index)
+    roll3_std = np.sqrt(np.clip(roll3_mean_sq - np.square(roll3_mean), 0.0, None))
+    roll3_cv = roll3_std / (roll3_mean + 1e-9)
     df["plateau_flag"] = (roll3_cv < 0.10).astype(float)
     df.loc[df["Outlet_ID"].isin(hist_months[hist_months < 3].index), "plateau_flag"] = np.nan
-    cens_plateau  = df.groupby("Outlet_ID")["plateau_flag"].mean().fillna(0.0)
+    cens_plateau = df.groupby("Outlet_ID")["plateau_flag"].mean().fillna(0.0)
 
     df["at_cap_flag"] = (
         np.abs(df["monthly_volume"] - df["dist_month_median"])
@@ -117,29 +116,20 @@ def build_outlet_features(monthly: pd.DataFrame, target_month: int = 1) -> pd.Da
     ).astype(float)
     cens_dist_cap = df.groupby("Outlet_ID")["at_cap_flag"].mean().fillna(0.0)
 
-    yearly = (
-        df.groupby(["Outlet_ID", "Year"])["monthly_volume"]
-        .mean().reset_index().sort_values(["Outlet_ID", "Year"])
-    )
+    yearly = df.groupby(["Outlet_ID", "Year"])["monthly_volume"].mean().reset_index().sort_values(["Outlet_ID", "Year"])
     yearly["growth"] = yearly.groupby("Outlet_ID")["monthly_volume"].pct_change()
-    yearly["stagnation_flag"] = np.where(
-        yearly["growth"].isna(), np.nan,
-        (np.abs(yearly["growth"]) < 0.05).astype(float)
-    )
+    yearly["stagnation_flag"] = np.where(yearly["growth"].isna(), np.nan, (np.abs(yearly["growth"]) < 0.05).astype(float))
     cens_stagnation = yearly.groupby("Outlet_ID")["stagnation_flag"].mean().fillna(0.0)
-    yoy_growth      = yearly.groupby("Outlet_ID")["growth"].mean().fillna(0.0).clip(-0.30, 0.50)
+    yoy_growth = yearly.groupby("Outlet_ID")["growth"].mean().fillna(0.0).clip(-0.30, 0.50)
 
     cens_cv_score = ((0.30 - hist_cv) / 0.30).clip(lower=0.0)
 
     df["q4_vol"] = np.where(df["Month"].isin([10, 11, 12]), df["monthly_volume"], np.nan)
-    q4_mean  = df.groupby("Outlet_ID")["q4_vol"].mean()
+    q4_mean = df.groupby("Outlet_ID")["q4_vol"].mean()
     q4_count = df.groupby("Outlet_ID")["q4_vol"].count()
-    q4_prem  = q4_mean / (hist_mean_vol + 1e-9) - 1.0
+    q4_prem = q4_mean / (hist_mean_vol + 1e-9) - 1.0
     cens_q4_raw = (-q4_prem * 2.0).clip(0.0, 1.0).fillna(0.0)
-    cens_q4_suppression = pd.Series(
-        np.where(q4_count >= 2, cens_q4_raw, 0.0),
-        index=hist_mean_vol.index
-    )
+    cens_q4_suppression = pd.Series(np.where(q4_count >= 2, cens_q4_raw, 0.0), index=hist_mean_vol.index)
 
     censoring_score = (
         0.30 * cens_plateau
@@ -149,138 +139,124 @@ def build_outlet_features(monthly: pd.DataFrame, target_month: int = 1) -> pd.Da
         + 0.10 * cens_q4_suppression
     ).clip(0.0, 1.0)
 
-    roll3_mean_avg           = roll3_mean.groupby(df["Outlet_ID"]).mean()
+    # Proximity & variance
     capacity_proximity_ratio = pd.Series(
         np.clip(
             np.where(
                 hist_months >= 3,
-                roll3_mean_avg / (hist_max_vol + 1e-9),
-                hist_mean_vol  / (hist_max_vol + 1e-9)
+                roll3_mean.groupby(df["Outlet_ID"]).mean() / (hist_max_vol + 1e-9),
+                hist_mean_vol / (hist_max_vol + 1e-9)
             ), 0.0, 1.0
         ), index=hist_mean_vol.index
     )
 
+    # Vectorized shift-based rolling 6-month mean
+    mask6 = (df["Outlet_ID"] == df["Outlet_ID"].shift(5))
     roll6_mean = (
-        df.groupby("Outlet_ID")["monthly_volume"]
-        .rolling(6, min_periods=6)
-        .mean()
-        .reset_index(level=0, drop=True)
-    )
+        df["monthly_volume"] + 
+        df["monthly_volume"].shift(1) + 
+        df["monthly_volume"].shift(2) + 
+        df["monthly_volume"].shift(3) + 
+        df["monthly_volume"].shift(4) + 
+        df["monthly_volume"].shift(5)
+    ) / 6.0
+    roll6_mean = pd.Series(np.where(mask6, roll6_mean, np.nan), index=df.index)
     roll6_mean_sq = (
-        df.groupby("Outlet_ID")["monthly_volume_sq"]
-        .rolling(6, min_periods=6)
-        .mean()
-        .reset_index(level=0, drop=True)
-    )
-    roll6_std     = np.sqrt((roll6_mean_sq - roll6_mean.pow(2)).clip(lower=0))
-    roll6_cv      = roll6_std / (roll6_mean + 1e-9)
-    ppv_raw       = roll6_cv.groupby(df["Outlet_ID"]).mean()
+        df["monthly_volume_sq"] + 
+        df["monthly_volume_sq"].shift(1) + 
+        df["monthly_volume_sq"].shift(2) + 
+        df["monthly_volume_sq"].shift(3) + 
+        df["monthly_volume_sq"].shift(4) + 
+        df["monthly_volume_sq"].shift(5)
+    ) / 6.0
+    roll6_mean_sq = pd.Series(np.where(mask6, roll6_mean_sq, np.nan), index=df.index)
+    roll6_std = np.sqrt(np.clip(roll6_mean_sq - np.square(roll6_mean), 0.0, None))
+    roll6_cv = roll6_std / (roll6_mean + 1e-9)
     purchase_pace_variance = pd.Series(
-        np.where(hist_months >= 6, ppv_raw, hist_cv),
+        np.where(hist_months >= 6, roll6_cv.groupby(df["Outlet_ID"]).mean(), hist_cv),
         index=hist_mean_vol.index
     )
 
     dist_rank_mean = df.groupby("Outlet_ID")["dist_month_rank"].mean()
-
     target_vols = df[df["Month"] == target_month]
-    target_mean = (
-        target_vols.groupby("Outlet_ID")["monthly_volume"].mean()
-        .reindex(hist_mean_vol.index).fillna(hist_mean_vol)
-    )
+    target_mean = target_vols.groupby("Outlet_ID")["monthly_volume"].mean().reindex(hist_mean_vol.index).fillna(hist_mean_vol)
 
-    dist_sums    = (
-        df.groupby(["Outlet_ID", "Distributor_ID"])["monthly_volume"]
-        .sum().reset_index()
-    )
-    primary_dist = (
-        dist_sums.sort_values("monthly_volume")
-        .groupby("Outlet_ID")["Distributor_ID"].last()
-    )
+    dist_sums = df.groupby(["Outlet_ID", "Distributor_ID"])["monthly_volume"].sum().reset_index()
+    primary_dist = dist_sums.sort_values("monthly_volume").groupby("Outlet_ID")["Distributor_ID"].last()
+
+    # Vectorized rolling median and maximum (min_periods=1)
+    m1 = (df["Outlet_ID"] == df["Outlet_ID"].shift(1))
+    m2 = (df["Outlet_ID"] == df["Outlet_ID"].shift(2))
+    c0 = df["monthly_volume"]
+    c1 = np.where(m1, df["monthly_volume"].shift(1), np.nan)
+    c2 = np.where(m2, df["monthly_volume"].shift(2), np.nan)
+    stacked = np.column_stack([c0, c1, c2])
+    roll_med_all = np.nanmedian(stacked, axis=1)
+    roll_max_all = np.nanmax(stacked, axis=1)
+    df_roll_med = pd.Series(roll_med_all, index=df.index)
+    df_roll_max = pd.Series(roll_max_all, index=df.index)
+    rolling_median = df_roll_med.groupby(df["Outlet_ID"]).last().reindex(hist_mean_vol.index)
+    rolling_maximum = df_roll_max.groupby(df["Outlet_ID"]).last().reindex(hist_mean_vol.index)
 
     return pd.DataFrame({
-        "hist_mean_vol":            hist_mean_vol,
-        "hist_median_vol":          hist_median_vol,
-        "hist_max_vol":             hist_max_vol,
-        "hist_p75_vol":             hist_p75_vol,
-        "hist_p90_vol":             hist_p90_vol,
-        "hist_std_vol":             hist_std_vol,
-        "hist_cv":                  hist_cv,
-        "hist_months":              hist_months,
-        "censoring_score":          censoring_score,
-        "cens_plateau":             cens_plateau,
-        "cens_dist_cap":            cens_dist_cap,
-        "cens_stagnation":          cens_stagnation,
-        "cens_cv_score":            cens_cv_score,
-        "cens_q4_suppression":      cens_q4_suppression,
-        "yoy_growth":               yoy_growth,
-        "jan_hist_mean":            target_mean,
+        "hist_mean_vol": hist_mean_vol,
+        "hist_median_vol": hist_median_vol,
+        "hist_max_vol": hist_max_vol,
+        "hist_p75_vol": hist_p75_vol,
+        "hist_p90_vol": hist_p90_vol,
+        "hist_std_vol": hist_std_vol,
+        "hist_cv": hist_cv,
+        "hist_months": hist_months,
+        "censoring_score": censoring_score,
+        "cens_plateau": cens_plateau,
+        "cens_dist_cap": cens_dist_cap,
+        "cens_stagnation": cens_stagnation,
+        "cens_cv_score": cens_cv_score,
+        "cens_q4_suppression": cens_q4_suppression,
+        "yoy_growth": yoy_growth,
+        "jan_hist_mean": target_mean,
         "capacity_proximity_ratio": capacity_proximity_ratio,
-        "purchase_pace_variance":   purchase_pace_variance,
-        "dist_rank_mean":           dist_rank_mean,
-        "primary_dist":             primary_dist,
+        "purchase_pace_variance": purchase_pace_variance,
+        "dist_rank_mean": dist_rank_mean,
+        "primary_dist": primary_dist,
+        "rolling_median": rolling_median,
+        "rolling_maximum": rolling_maximum
     }).reset_index()
 
-
-FEATURE_COLS = [
-    "hist_mean_vol", "hist_median_vol", "hist_max_vol",
-    "hist_p75_vol", "hist_p90_vol", "hist_std_vol",
-    "hist_cv", "hist_months",
-    "censoring_score", "cens_plateau", "cens_dist_cap",
-    "cens_stagnation", "cens_cv_score", "cens_q4_suppression",
-    "capacity_proximity_ratio", "purchase_pace_variance", "dist_rank_mean",
-    "yoy_growth", "target_season_factor", "target_month",
-]
-
-
 def add_dist_stats(monthly: pd.DataFrame) -> pd.DataFrame:
-    """Compute dist_month_median and dist_month_rank within a training window."""
-    dist_med = (
-        monthly.groupby(["Distributor_ID", "Month"])["monthly_volume"]
-        .median().rename("dist_month_median").reset_index()
-    )
+    dist_med = monthly.groupby(["Distributor_ID", "Month"])["monthly_volume"].median().rename("dist_month_median").reset_index()
     monthly = monthly.merge(dist_med, on=["Distributor_ID", "Month"], how="left")
-    monthly["dist_month_rank"] = (
-        monthly.groupby(["Distributor_ID", "Month"])["monthly_volume"]
-        .rank(pct=True)
-    )
+    monthly["dist_month_rank"] = monthly.groupby(["Distributor_ID", "Month"])["monthly_volume"].rank(pct=True)
     return monthly
 
-
-def build_training_panel(
+def build_training_panel_for_window(
     monthly: pd.DataFrame,
     outlet: pd.DataFrame,
     season: pd.DataFrame,
-    train_periods: set,
-    n_train_targets: int = N_TRAIN_TARGETS,
+    poi_df: pd.DataFrame,
+    train_periods: list,
+    n_train_targets: int = N_TRAIN_TARGETS
 ) -> pd.DataFrame:
-    """
-    Build labelled training records from within `train_periods`.
-
-    For the last `n_train_targets` months in the training window:
-      - Features are built from all months strictly before the target month.
-      - Target is log1p(observed volume in that month).
-    """
+    """Prepare training panel strictly within the sliding cross-validation window."""
     sorted_periods = sorted(train_periods)
     target_periods = sorted_periods[-n_train_targets:]
-
+    
     records = []
-    for p in target_periods:
-        yr, mo = p // 12, p % 12
+    for p_idx in target_periods:
+        yr, mo = p_idx // 12, p_idx % 12
         if mo == 0:
             yr, mo = yr - 1, 12
-
-        cutoff = p
-        train_window = monthly[monthly["period_idx"] < cutoff].copy()
+            
+        train_window = monthly[monthly["period_idx"] < p_idx].copy()
         if train_window.empty or train_window["Outlet_ID"].nunique() < 5:
             continue
-
+            
+        train_window = train_window.drop(columns=[c for c in ["dist_month_median", "dist_month_rank"] if c in train_window.columns])
         train_window = add_dist_stats(train_window)
+        
         feats = build_outlet_features(train_window, target_month=mo)
-        feats = feats.merge(
-            outlet[["Outlet_ID", "Outlet_Type", "Outlet_Size"]],
-            on="Outlet_ID", how="left"
-        )
-
+        feats = feats.merge(outlet[["Outlet_ID", "Outlet_Type", "Outlet_Size", "Cooler_Count"]], on="Outlet_ID", how="left")
+        
         # Seasonality
         mo_season = (
             season[season["Month"] == mo]
@@ -289,19 +265,18 @@ def build_training_panel(
             .reset_index()
             .rename(columns={"Seasonality_Index": "target_seasonality"})
         )
-        feats = feats.merge(
-            mo_season, left_on="primary_dist", right_on="Distributor_ID",
-            how="left", suffixes=("", "_s")
-        )
-        feats["target_seasonality"]   = feats.get("target_seasonality", "Moderate").fillna("Moderate")
-        feats["target_season_factor"] = feats["target_seasonality"].map(
-            SEASONALITY_MULTIPLIER
-        ).fillna(1.0)
+        feats = feats.merge(mo_season, left_on="primary_dist", right_on="Distributor_ID", how="left")
+        feats["target_seasonality"] = feats["target_seasonality"].fillna("Moderate")
+        feats["target_season_factor"] = feats["target_seasonality"].map(SEASONALITY_MULTIPLIER).fillna(1.0)
         feats["target_month"] = mo
-
-        # Actual observed volumes in this target month
+        
+        # Merge POIs
+        if not poi_df.empty:
+            feats = feats.merge(poi_df, on="Outlet_ID", how="left")
+            
+        # Actuals
         actual = (
-            monthly[monthly["period_idx"] == p]
+            monthly[monthly["period_idx"] == p_idx]
             .groupby("Outlet_ID")["monthly_volume"].sum()
             .reset_index()
             .rename(columns={"monthly_volume": "actual_vol"})
@@ -310,270 +285,348 @@ def build_training_panel(
         feats = feats[feats["actual_vol"] > 0].copy()
         feats["target_log_vol"] = np.log1p(feats["actual_vol"])
         records.append(feats)
-
+        
     if not records:
         return pd.DataFrame()
     return pd.concat(records, ignore_index=True)
 
-
-def train_lgb_model(train_df: pd.DataFrame) -> lgb.LGBMRegressor:
-    """Train LightGBM on prepared training panel."""
-    feat_cols_avail = [c for c in FEATURE_COLS if c in train_df.columns]
-    X = train_df[feat_cols_avail].fillna(0)
-    y = train_df["target_log_vol"].values
-    model = lgb.LGBMRegressor(**LGB_PARAMS)
-    model.fit(X, y)
-    return model, feat_cols_avail
-
-
-def predict_for_periods(
-    model: lgb.LGBMRegressor,
-    feat_cols: list,
-    monthly: pd.DataFrame,
-    outlet: pd.DataFrame,
-    season: pd.DataFrame,
-    train_periods: set,
-    val_periods: set,
-) -> pd.DataFrame:
-    """
-    For each period in val_periods, build features from train_periods and predict.
-    Returns a DataFrame with Outlet_ID, period, prediction, censoring_score.
-    """
-    results = []
-    # Use the full training data for feature computation
-    train_monthly = monthly[monthly["period_idx"].isin(train_periods)].copy()
-    train_monthly = add_dist_stats(train_monthly)
-
-    for p in sorted(val_periods):
-        yr, mo = p // 12, p % 12
-        if mo == 0:
-            yr, mo = yr - 1, 12
-
-        feats = build_outlet_features(train_monthly, target_month=mo)
-        feats = feats.merge(
-            outlet[["Outlet_ID", "Outlet_Type", "Outlet_Size"]],
-            on="Outlet_ID", how="left"
-        )
-        mo_season = (
-            season[season["Month"] == mo]
-            .groupby("Distributor_ID")["Seasonality_Index"]
-            .agg(lambda x: x.mode().iloc[0] if len(x) > 0 else "Moderate")
-            .reset_index()
-            .rename(columns={"Seasonality_Index": "target_seasonality"})
-        )
-        feats = feats.merge(
-            mo_season, left_on="primary_dist", right_on="Distributor_ID",
-            how="left", suffixes=("", "_s")
-        )
-        feats["target_seasonality"]   = feats.get("target_seasonality", "Moderate").fillna("Moderate")
-        feats["target_season_factor"] = feats["target_seasonality"].map(
-            SEASONALITY_MULTIPLIER
-        ).fillna(1.0)
-        feats["target_month"] = mo
-
-        feat_cols_avail = [c for c in feat_cols if c in feats.columns]
-        X = feats[feat_cols_avail].fillna(0)
-        log_pred = model.predict(X)
-        feats["prediction"]  = np.clip(np.expm1(log_pred), 1.0, None)
-        feats["period_idx"]  = p
-        results.append(feats[["Outlet_ID", "period_idx", "prediction", "censoring_score"]])
-
-    if not results:
-        return pd.DataFrame()
-    return pd.concat(results, ignore_index=True)
-
-
-def compute_metrics(actual: np.ndarray, predicted: np.ndarray) -> dict:
-    """Compute MAE, RMSE, MedAE, and MAPE."""
-    errors  = predicted - actual
-    abs_err = np.abs(errors)
+def compute_metrics(y_true: np.ndarray, y_pred: np.ndarray) -> dict:
+    errors = y_pred - y_true
+    abs_errors = np.abs(errors)
+    mape = np.mean(abs_errors / np.clip(np.abs(y_true), 1.0, None)) * 100
+    r2 = 1.0 - (np.sum(errors**2) / (np.sum((y_true - np.mean(y_true))**2) + 1e-9))
     return {
-        "MAE":    float(np.mean(abs_err)),
-        "RMSE":   float(np.sqrt(np.mean(errors ** 2))),
-        "MedAE":  float(np.median(abs_err)),
-        "MAPE_%": float(np.mean(abs_err / (np.abs(actual) + 1e-9)) * 100),
+        "MAE": float(np.mean(abs_errors)),
+        "RMSE": float(np.sqrt(np.mean(errors**2))),
+        "MAPE_%": float(mape),
+        "R2": float(r2)
     }
 
-
-# ---------------------------------------------------------------------------
-# MAIN
-# ---------------------------------------------------------------------------
-
 def main():
-    print("=" * 60)
-    print("OUT-OF-TIME VALIDATION - LightGBM Chronological Holdout")
-    print("=" * 60)
-    print(f"  TimeSeriesSplit folds:   {N_SPLITS}")
-    print(f"  Training targets/fold:   {N_TRAIN_TARGETS} months")
-    print(f"  Final holdout months:    {HOLDOUT_MONTHS}")
-
-    # Load data
-    print("\n[1/4] Loading Silver data...")
-    tx     = pd.read_parquet(SILVER / "transactions.parquet")
+    logger.info("Starting out-of-time walk-forward validation comparison framework...")
+    
+    # Load raw
+    tx = pd.read_parquet(SILVER / "transactions.parquet")
     outlet = pd.read_parquet(SILVER / "outlet_master.parquet")
     season = pd.read_parquet(SILVER / "distributor_seasonality.parquet")
-
-    # Monthly aggregation
-    print("[2/4] Aggregating to monthly outlet level...")
+    
+    poi_path = POI_CACHE / "poi_features.parquet"
+    poi_df = pd.read_parquet(poi_path) if poi_path.exists() else pd.DataFrame()
+    
+    # Monthly
     monthly = (
         tx.groupby(["Outlet_ID", "Year", "Month", "Distributor_ID"])
         .agg(monthly_volume=("Volume_Liters", "sum"))
         .reset_index()
     )
     monthly["period_idx"] = monthly["Year"] * 12 + monthly["Month"]
-    all_periods           = sorted(monthly["period_idx"].unique())
-    n_periods             = len(all_periods)
-    print(f"  Total periods: {n_periods}  "
-          f"(from {min(all_periods)//12}-{min(all_periods)%12:02d} "
-          f"to {max(all_periods)//12}-{max(all_periods)%12:02d})")
-
-    period_to_pos = {p: i for i, p in enumerate(all_periods)}
-    monthly["period_pos"] = monthly["period_idx"].map(period_to_pos)
-
-    # -----------------------------------------------------------------------
-    # TimeSeriesSplit rolling-window validation
-    # -----------------------------------------------------------------------
-    print(f"\n[3/4] Running {N_SPLITS}-fold out-of-time validation with LightGBM...")
-    tss              = TimeSeriesSplit(n_splits=N_SPLITS, gap=0)
-    period_positions = np.arange(n_periods)
-    fold_results     = []
-
-    for fold_idx, (train_pos_idx, val_pos_idx) in enumerate(tss.split(period_positions)):
-        if len(train_pos_idx) < MIN_TRAIN_MONTHS:
+    
+    all_periods = sorted(monthly["period_idx"].unique())
+    n_periods = len(all_periods)
+    logger.info(f"Loaded {n_periods} monthly intervals for CV.")
+    
+    # Set up walk-forward validation (TimeSeriesSplit)
+    tss = TimeSeriesSplit(n_splits=N_SPLITS)
+    fold_results = []
+    
+    for fold_idx, (train_pos, val_pos) in enumerate(tss.split(np.arange(n_periods))):
+        if len(train_pos) < MIN_TRAIN_MONTHS:
             continue
-
-        train_periods = set(all_periods[i] for i in train_pos_idx)
-        val_periods   = set(all_periods[i] for i in val_pos_idx)
-
-        t_min = min(train_periods)
-        t_max = max(train_periods)
-        v_min = min(val_periods)
-        v_max = max(val_periods)
-        label = (f"  Fold {fold_idx+1}: train "
-                 f"{t_min//12}-{t_min%12:02d} -> {t_max//12}-{t_max%12:02d} | "
-                 f"validate {v_min//12}-{v_min%12:02d} -> {v_max//12}-{v_max%12:02d}")
-        print(label)
-
-        # Build training panel
-        train_df = build_training_panel(monthly, outlet, season, train_periods, N_TRAIN_TARGETS)
-        if train_df.empty:
-            print("    [SKIP] Insufficient training data.")
+            
+        train_periods = [all_periods[i] for i in train_pos]
+        val_periods = [all_periods[i] for i in val_pos]
+        
+        t_min, t_max = min(train_periods), max(train_periods)
+        v_min, v_max = min(val_periods), max(val_periods)
+        
+        logger.info(f"Fold {fold_idx+1}: Train window {t_min//12}-{t_min%12:02d} -> {t_max//12}-{t_max%12:02d} | Val window {v_min//12}-{v_min%12:02d} -> {v_max//12}-{v_max%12:02d}")
+        
+        # Build training panel data
+        train_panel = build_training_panel_for_window(monthly, outlet, season, poi_df, train_periods, n_train_targets=N_TRAIN_TARGETS)
+        if train_panel.empty:
             continue
-
-        # Train LightGBM
-        model, feat_cols = train_lgb_model(train_df)
-
-        # Predict on validation periods
-        preds_df = predict_for_periods(
-            model, feat_cols, monthly, outlet, season, train_periods, val_periods
-        )
-        if preds_df.empty:
-            continue
-
-        # Actuals: mean observed volume across validation periods per outlet
-        actuals = (
-            monthly[monthly["period_idx"].isin(val_periods)]
-            .groupby("Outlet_ID")["monthly_volume"]
-            .mean()
-            .reset_index()
-            .rename(columns={"monthly_volume": "actual"})
-        )
-        # Average predictions across validation periods per outlet
-        preds_agg = (
-            preds_df.groupby("Outlet_ID")["prediction"]
-            .mean()
+            
+        # Reconstruct advanced features
+        peer_p90_t = (
+            train_panel.groupby(["Outlet_Type", "Outlet_Size", "target_month"])["hist_median_vol"]
+            .quantile(0.90)
+            .rename("peer_p90_t")
             .reset_index()
         )
-        merged = preds_agg.merge(actuals, on="Outlet_ID", how="inner")
-        if merged.empty:
-            continue
-
-        metrics = compute_metrics(merged["actual"].values, merged["prediction"].values)
-        metrics.update({
-            "fold":           fold_idx + 1,
-            "train_periods":  len(train_periods),
-            "val_periods":    len(val_periods),
-            "outlets_scored": len(merged),
-            "train_end":      f"{t_max//12}-{t_max%12:02d}",
-            "val_window":     f"{v_min//12}-{v_min%12:02d} -> {v_max//12}-{v_max%12:02d}",
-        })
-        fold_results.append(metrics)
-        print(f"    MAE={metrics['MAE']:,.1f} L  |  RMSE={metrics['RMSE']:,.1f} L  |  "
-              f"MedAE={metrics['MedAE']:,.1f} L  |  MAPE={metrics['MAPE_%']:.1f}%  |  "
-              f"n={metrics['outlets_scored']:,}")
-
-    # -----------------------------------------------------------------------
-    # Final out-of-time holdout (Nov-Dec 2025 as Jan 2026 proxy)
-    # -----------------------------------------------------------------------
-    print(f"\n[4/4] Final holdout: train up to Oct 2025, validate Nov-Dec 2025...")
-    holdout_period_idxs = set(y * 12 + m for y, m in HOLDOUT_MONTHS)
-    cutoff_period       = min(holdout_period_idxs) - 1   # Oct 2025
-
-    final_train_periods = set(p for p in all_periods if p <= cutoff_period)
-    final_val_periods   = holdout_period_idxs
-
-    final_train_df = build_training_panel(
-        monthly, outlet, season, final_train_periods, N_TRAIN_TARGETS
-    )
-    final_metrics = {}
-    if not final_train_df.empty:
-        final_model, final_feat_cols = train_lgb_model(final_train_df)
-        final_preds_df = predict_for_periods(
-            final_model, final_feat_cols,
-            monthly, outlet, season,
-            final_train_periods, final_val_periods
+        train_panel = train_panel.merge(peer_p90_t, on=["Outlet_Type", "Outlet_Size", "target_month"], how="left")
+        train_panel["peer_p90_t"] = train_panel["peer_p90_t"].fillna(train_panel["hist_median_vol"])
+        train_panel["peer_efficiency_gap"] = (train_panel["peer_p90_t"] / (train_panel["hist_median_vol"] + 1e-9)).clip(1.0, 3.0)
+        train_panel = train_panel.drop(columns=["peer_p90_t"])
+        train_panel["outlet_efficiency_index"] = (train_panel["hist_median_vol"] / (train_panel["hist_max_vol"] + 1e-9)).clip(0.0, 1.0)
+        
+        dist_season_strength = season.copy().assign(val=lambda r: r["Seasonality_Index"].map(SEASONALITY_MULTIPLIER)).groupby("Distributor_ID")["val"].std().fillna(0.0).rename("seasonality_strength").reset_index()
+        train_panel = train_panel.merge(dist_season_strength, left_on="primary_dist", right_on="Distributor_ID", how="left")
+        train_panel["seasonality_strength"] = train_panel["seasonality_strength"].fillna(0.0)
+        
+        if "h3_index" in train_panel.columns and train_panel["h3_index"].nunique() > 1:
+            sum_8_t = train_panel.groupby(["h3_index", "target_month"])["hist_median_vol"].transform("sum")
+            cnt_8_t = train_panel.groupby(["h3_index", "target_month"])["hist_median_vol"].transform("count")
+            train_panel["local_peer_performance"] = ((sum_8_t - train_panel["hist_median_vol"]) / (cnt_8_t - 1).clip(1)).fillna(train_panel["hist_median_vol"])
+            sum_6_t = train_panel.groupby(["h3_res6", "target_month"])["hist_median_vol"].transform("sum")
+            cnt_6_t = train_panel.groupby(["h3_res6", "target_month"])["hist_median_vol"].transform("count")
+            train_panel["regional_peer_performance"] = ((sum_6_t - train_panel["hist_median_vol"]) / (cnt_6_t - 1).clip(1)).fillna(train_panel["hist_median_vol"])
+            train_panel["population_proxy"] = (cnt_8_t / cnt_8_t.max()).fillna(0.0)
+        else:
+            train_panel["local_peer_performance"] = train_panel["hist_median_vol"]
+            train_panel["regional_peer_performance"] = train_panel["hist_median_vol"]
+            train_panel["population_proxy"] = 0.0
+            
+        if "poi_competitor" in train_panel.columns:
+            train_panel["hyperlocal_competition"] = train_panel["poi_competitor"]
+        else:
+            train_panel["hyperlocal_competition"] = 0
+            
+        gravity_cols_t = [c for c in train_panel.columns if c.endswith("_gravity_score") and not c.startswith("competitor")]
+        train_panel["gravity_catchment_score"] = train_panel[gravity_cols_t].sum(axis=1) if gravity_cols_t else 0.0
+        
+        bus_col = "bus_stop_gaussian_score"
+        fuel_col = "fuel_station_gaussian_score"
+        if bus_col in train_panel.columns and fuel_col in train_panel.columns:
+            train_panel["market_accessibility"] = (train_panel[bus_col] + train_panel[fuel_col]) / 2.0
+        else:
+            train_panel["market_accessibility"] = 0.0
+            
+        train_panel["jan_base"] = train_panel["jan_hist_mean"].where(
+            train_panel["jan_hist_mean"].notna() & (train_panel["jan_hist_mean"] > 0),
+            train_panel["hist_median_vol"]
         )
-        actuals_final = (
-            monthly[monthly["period_idx"].isin(final_val_periods)]
-            .groupby("Outlet_ID")["monthly_volume"]
-            .mean()
-            .reset_index()
-            .rename(columns={"monthly_volume": "actual"})
-        )
-        preds_final_agg = (
-            final_preds_df.groupby("Outlet_ID")["prediction"]
-            .mean()
-            .reset_index()
-        )
-        merged_final = preds_final_agg.merge(actuals_final, on="Outlet_ID", how="inner")
-
-        if not merged_final.empty:
-            final_metrics = compute_metrics(
-                merged_final["actual"].values,
-                merged_final["prediction"].values
+        
+        # Features lists
+        feature_cols = [
+            "hist_mean_vol", "hist_median_vol", "hist_max_vol", "hist_p75_vol", "hist_p90_vol",
+            "hist_cv", "hist_months", "censoring_score", "cens_plateau", "cens_dist_cap",
+            "cens_stagnation", "cens_cv_score", "cens_q4_suppression", "yoy_growth",
+            "capacity_proximity_ratio", "purchase_pace_variance", "dist_rank_mean",
+            "target_season_factor", "target_month", "Cooler_Count",
+            "combined_catchment_score", "competitor_density_gaussian", "competitor_density_gravity",
+            "market_saturation_index", "competition_dampener", "gravity_catchment_score",
+            "market_accessibility", "population_proxy", "peer_efficiency_gap",
+            "outlet_efficiency_index", "seasonality_strength", "local_peer_performance",
+            "regional_peer_performance", "hyperlocal_competition"
+        ]
+        feature_cols = [c for c in feature_cols if c in train_panel.columns]
+        
+        # Categoricals setup
+        cat_cols = ["Outlet_Type", "Outlet_Size", "target_seasonality"]
+        for c in cat_cols:
+            if c in train_panel.columns:
+                train_panel[c] = train_panel[c].astype("category")
+                if c not in feature_cols:
+                    feature_cols.append(c)
+                    
+        # Split features & targets
+        X_train = train_panel[feature_cols].copy()
+        y_train = train_panel["target_log_vol"].values
+        
+        # Fill NaNs
+        for c in feature_cols:
+            if X_train[c].dtype.name != 'category':
+                X_train[c] = X_train[c].fillna(0.0)
+                
+        # Build validation set for this specific holdout POS
+        # We predict on the validation months (aggregated volume)
+        val_monthly = monthly[monthly["period_idx"].isin(val_periods)].copy()
+        val_monthly = add_dist_stats(val_monthly)
+        
+        # We need to construct prediction features at the validation boundary
+        # i.e., features are computed using the train_periods
+        train_monthly = monthly[monthly["period_idx"].isin(train_periods)].copy()
+        train_monthly = add_dist_stats(train_monthly)
+        
+        for p_val in sorted(val_periods):
+            yr, mo = p_val // 12, p_val % 12
+            if mo == 0:
+                yr, mo = yr - 1, 12
+                
+            val_feats = build_outlet_features(train_monthly, target_month=mo)
+            val_feats = val_feats.merge(outlet, on="Outlet_ID", how="left")
+            
+            # Seasonality
+            mo_season_val = (
+                season[season["Month"] == mo]
+                .groupby("Distributor_ID")["Seasonality_Index"]
+                .agg(lambda x: x.mode().iloc[0] if len(x) > 0 else "Moderate")
+                .reset_index()
+                .rename(columns={"Seasonality_Index": "target_seasonality"})
             )
-            final_metrics.update({
-                "fold":           "FINAL_HOLDOUT",
-                "train_periods":  len(final_train_periods),
-                "val_periods":    len(final_val_periods),
-                "outlets_scored": len(merged_final),
-                "train_end":      "2025-10",
-                "val_window":     "2025-11 -> 2025-12",
-            })
-            fold_results.append(final_metrics)
-            print(f"  FINAL HOLDOUT:  MAE={final_metrics['MAE']:,.1f} L  |  "
-                  f"RMSE={final_metrics['RMSE']:,.1f} L  |  "
-                  f"MedAE={final_metrics['MedAE']:,.1f} L  |  "
-                  f"MAPE={final_metrics['MAPE_%']:.1f}%")
-
-    # -----------------------------------------------------------------------
-    # Save and summarize
-    # -----------------------------------------------------------------------
-    results_df = pd.DataFrame(fold_results)
-    out_path   = OUTPUT / "validation_report.csv"
-    results_df.to_csv(out_path, index=False)
-
-    print(f"\n[SUMMARY] Cross-fold averages (excluding final holdout):")
-    cv_rows = results_df[results_df["fold"] != "FINAL_HOLDOUT"]
-    if not cv_rows.empty:
-        print(f"  Avg MAE:   {cv_rows['MAE'].mean():,.1f} L")
-        print(f"  Avg RMSE:  {cv_rows['RMSE'].mean():,.1f} L")
-        print(f"  Avg MedAE: {cv_rows['MedAE'].mean():,.1f} L")
-        print(f"  Avg MAPE:  {cv_rows['MAPE_%'].mean():.1f}%")
-
-    print(f"\n  Validation report saved -> {out_path}")
-    print("\n[OK]  Out-of-time validation complete.\n")
-
+            val_feats = val_feats.merge(mo_season_val, left_on="primary_dist", right_on="Distributor_ID", how="left")
+            val_feats["target_seasonality"] = val_feats["target_seasonality"].fillna("Moderate")
+            val_feats["target_season_factor"] = val_feats["target_seasonality"].map(SEASONALITY_MULTIPLIER).fillna(1.0)
+            val_feats["target_month"] = mo
+            
+            # Map Meta factors
+            val_feats["size_factor"] = val_feats["Outlet_Size"].map(SIZE_POTENTIAL_FACTOR).fillna(1.0)
+            val_feats["type_factor"] = val_feats["Outlet_Type"].map(TYPE_POTENTIAL_FACTOR).fillna(1.0)
+            
+            if not poi_df.empty:
+                drop_cols = [c for c in ["poi_lat", "poi_lon", "Latitude", "Longitude"] if c in poi_df.columns]
+                val_feats = val_feats.merge(poi_df.drop(columns=drop_cols, errors="ignore"), on="Outlet_ID", how="left")
+                
+            # peer gap
+            peer_p90_val = (
+                val_feats.groupby(["Outlet_Type", "Outlet_Size"])["hist_median_vol"]
+                .quantile(0.90)
+                .rename("peer_p90_val")
+                .reset_index()
+            )
+            val_feats = val_feats.merge(peer_p90_val, on=["Outlet_Type", "Outlet_Size"], how="left")
+            val_feats["peer_p90_val"] = val_feats["peer_p90_val"].fillna(val_feats["hist_median_vol"])
+            val_feats["peer_efficiency_gap"] = (val_feats["peer_p90_val"] / (val_feats["hist_median_vol"] + 1e-9)).clip(1.0, 3.0)
+            val_feats = val_feats.drop(columns=["peer_p90_val"])
+            val_feats["outlet_efficiency_index"] = (val_feats["hist_median_vol"] / (val_feats["hist_max_vol"] + 1e-9)).clip(0.0, 1.0)
+            
+            val_feats = val_feats.merge(dist_season_strength, left_on="primary_dist", right_on="Distributor_ID", how="left")
+            val_feats["seasonality_strength"] = val_feats["seasonality_strength"].fillna(0.0)
+            
+            if "h3_index" in val_feats.columns and val_feats["h3_index"].nunique() > 1:
+                sum_8_v = val_feats.groupby("h3_index")["hist_median_vol"].transform("sum")
+                cnt_8_v = val_feats.groupby("h3_index")["hist_median_vol"].transform("count")
+                val_feats["local_peer_performance"] = ((sum_8_v - val_feats["hist_median_vol"]) / (cnt_8_v - 1).clip(1)).fillna(val_feats["hist_median_vol"])
+                sum_6_v = val_feats.groupby("h3_res6")["hist_median_vol"].transform("sum")
+                cnt_6_v = val_feats.groupby("h3_res6")["hist_median_vol"].transform("count")
+                val_feats["regional_peer_performance"] = ((sum_6_v - val_feats["hist_median_vol"]) / (cnt_6_v - 1).clip(1)).fillna(val_feats["hist_median_vol"])
+                val_feats["population_proxy"] = (cnt_8_v / cnt_8_v.max()).fillna(0.0)
+            else:
+                val_feats["local_peer_performance"] = val_feats["hist_median_vol"]
+                val_feats["regional_peer_performance"] = val_feats["hist_median_vol"]
+                val_feats["population_proxy"] = 0.0
+                
+            if "poi_competitor" in val_feats.columns:
+                val_feats["hyperlocal_competition"] = val_feats["poi_competitor"]
+            else:
+                val_feats["hyperlocal_competition"] = 0
+                
+            val_feats["gravity_catchment_score"] = val_feats[gravity_cols_t].sum(axis=1) if gravity_cols_t else 0.0
+            
+            if bus_col in val_feats.columns and fuel_col in val_feats.columns:
+                val_feats["market_accessibility"] = (val_feats[bus_col] + val_feats[fuel_col]) / 2.0
+            else:
+                val_feats["market_accessibility"] = 0.0
+                
+            val_feats["jan_base"] = val_feats["jan_hist_mean"].where(
+                val_feats["jan_hist_mean"].notna() & (val_feats["jan_hist_mean"] > 0),
+                val_feats["hist_median_vol"]
+            )
+            
+            actual_val = (
+                monthly[monthly["period_idx"] == p_val]
+                .groupby("Outlet_ID")["monthly_volume"].sum()
+                .reset_index()
+                .rename(columns={"monthly_volume": "actual"})
+            )
+            
+            val_combined = val_feats.merge(actual_val, on="Outlet_ID", how="inner")
+            val_combined = val_combined[val_combined["actual"] > 0].copy()
+            
+            if val_combined.empty:
+                continue
+                
+            # Align categoricals
+            for c in cat_cols:
+                if c in val_combined.columns:
+                    val_combined[c] = val_combined[c].astype("category")
+                    
+            X_val = val_combined[feature_cols].copy()
+            for c in feature_cols:
+                if X_val[c].dtype.name != 'category':
+                    X_val[c] = X_val[c].fillna(0.0)
+                    
+            # 1. Evaluate Heuristic Model
+            y_pred_heur = (
+                val_combined["jan_base"] *
+                val_combined["size_factor"] *
+                val_combined["type_factor"] *
+                val_combined["target_season_factor"] *
+                (1.0 + val_combined["censoring_score"] * 0.40) *
+                val_combined["peer_efficiency_gap"] *
+                (1.0 + val_combined["combined_catchment_score"] * 0.15) *
+                val_combined["competition_dampener"]
+            ).values
+            metrics_heur = compute_metrics(val_combined["actual"].values, y_pred_heur)
+            
+            # 2. Evaluate Quantile Regressor
+            hgb_qr = HistGradientBoostingRegressor(loss="quantile", quantile=0.90, max_iter=200, random_state=42)
+            X_train_num = X_train.copy()
+            X_val_num = X_val.copy()
+            for cat in cat_cols:
+                if cat in X_train_num.columns:
+                    X_train_num[cat] = X_train_num[cat].cat.codes
+                    X_val_num[cat] = X_val_num[cat].cat.codes
+            hgb_qr.fit(X_train_num, y_train)
+            y_pred_hgb_log = hgb_qr.predict(X_val_num)
+            y_pred_hgb = np.expm1(y_pred_hgb_log)
+            metrics_hgb = compute_metrics(val_combined["actual"].values, y_pred_hgb)
+            
+            # 3. Evaluate LightGBM
+            lgb_qr = lgb.LGBMRegressor(**LGB_PARAMS)
+            lgb_qr.fit(X_train, y_train, categorical_feature=[c for c in cat_cols if c in X_train.columns])
+            y_pred_lgb_log = lgb_qr.predict(X_val)
+            y_pred_lgb = np.expm1(y_pred_lgb_log)
+            metrics_lgb = compute_metrics(val_combined["actual"].values, y_pred_lgb)
+            
+            # Record
+            fold_results.append({"fold": fold_idx+1, "period": f"{yr}-{mo:02d}", "Model": "Heuristic", **metrics_heur})
+            fold_results.append({"fold": fold_idx+1, "period": f"{yr}-{mo:02d}", "Model": "Quantile Regressor", **metrics_hgb})
+            fold_results.append({"fold": fold_idx+1, "period": f"{yr}-{mo:02d}", "Model": "LightGBM Quantile", **metrics_lgb})
+            
+    # Save Report
+    cv_report = pd.DataFrame(fold_results)
+    cv_report.to_csv(OUTPUT / "validation_report.csv", index=False)
+    logger.info(f"Walk-forward validation report saved to {OUTPUT / 'validation_report.csv'}")
+    
+    # Compute averages
+    summary = cv_report.groupby(["Model"]).agg({
+        "MAE": "mean",
+        "RMSE": "mean",
+        "MAPE_%": "mean",
+        "R2": "mean"
+    }).reset_index()
+    
+    logger.info("\n" + "="*80 + "\nCROSS-VALIDATION AVERAGES OVER ALL FOLDS:\n" + "="*80)
+    logger.info(f"{'Model':<30} | {'Mean MAE':<12} | {'Mean RMSE':<12} | {'Mean MAPE %':<12} | {'Mean R²':<8}")
+    logger.info("-"*80)
+    for _, r in summary.iterrows():
+        logger.info(f"{r['Model']:<30} | {r['MAE']:<12.2f} | {r['RMSE']:<12.2f} | {r['MAPE_%']:<12.2f} | {r['R2']:<8.4f}")
+    logger.info("="*80)
+    
+    # 9. Plot Validation Curves
+    fig, (ax1, ax2) = plt.subplots(1, 2, figsize=(14, 6))
+    
+    models = ["Heuristic", "Quantile Regressor", "LightGBM Quantile"]
+    colors = ["#1f77b4", "#2ca02c", "#d62728"]
+    
+    for model, clr in zip(models, colors):
+        sub = cv_report[cv_report["Model"] == model].sort_values("fold")
+        folds = sub["fold"].values
+        
+        ax1.plot(folds, sub["MAPE_%"], marker="o", color=clr, label=model, lw=2)
+        ax2.plot(folds, sub["MAE"], marker="s", color=clr, label=model, lw=2)
+        
+    ax1.set_title("Walk-Forward Validation: MAPE Curve", fontsize=11, fontweight="bold")
+    ax1.set_xlabel("Chronological Fold Index", fontsize=9)
+    ax1.set_ylabel("MAPE (%)", fontsize=9)
+    ax1.set_xticks(np.arange(1, N_SPLITS + 1))
+    ax1.legend()
+    
+    ax2.set_title("Walk-Forward Validation: MAE Curve", fontsize=11, fontweight="bold")
+    ax2.set_xlabel("Chronological Fold Index", fontsize=9)
+    ax2.set_ylabel("MAE (Liters)", fontsize=9)
+    ax2.set_xticks(np.arange(1, N_SPLITS + 1))
+    ax2.legend()
+    
+    fig.suptitle("DataStorm 2026 - Model Validation Performance Comparisons", fontsize=13, fontweight="bold")
+    plt.tight_layout()
+    
+    curve_path = OUTPUT / "validation_curves.png"
+    fig.savefig(curve_path, dpi=150, bbox_inches="tight")
+    plt.close(fig)
+    logger.info(f"Validation performance curves plotted to {curve_path}")
+    logger.info("Out-of-time validation framework completed successfully.\n")
 
 if __name__ == "__main__":
     main()

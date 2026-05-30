@@ -61,14 +61,14 @@ Examples:
   python run_pipeline.py --poi --validate    # Everything
         """
     )
-    parser.add_argument("--poi", action="store_true",
-                        help="Run live POI scraping (slow — ~8h for all outlets)")
+    parser.add_argument("--no-poi", action="store_true",
+                        help="Skip POI processing")
     parser.add_argument("--poi-sample", type=int, default=None,
                         help="POI scrape sample size (for testing)")
-    parser.add_argument("--validate", action="store_true",
-                        help="Run out-of-time TimeSeriesSplit validation after gold model")
-    parser.add_argument("--compare", action="store_true",
-                        help="Generate input vs prediction comparison plots")
+    parser.add_argument("--no-validate", action="store_true",
+                        help="Skip out-of-time validation")
+    parser.add_argument("--no-compare", action="store_true",
+                        help="Skip comparison analysis plots")
     args = parser.parse_args()
 
     # -----------------------------------------------------------------------
@@ -79,24 +79,26 @@ Examples:
         ("Silver Cleaning + DQ",    "pipeline/02_silver_clean.py",       []),
     ]
 
-    # POI scraping (optional — injected between Silver and Gold)
-    if args.poi or args.poi_sample:
+    # POI processing
+    if not args.no_poi:
         poi_args = []
         if args.poi_sample:
             poi_args = ["--sample", str(args.poi_sample)]
-        steps.append(("POI Scraping (OSM/Overpass)", "pipeline/03_poi_scraper.py", poi_args))
+        steps.append(("Spatial & Competitor Analytics", "pipeline/03_poi_scraper.py", poi_args))
 
     steps.append(("Gold Features & Model", "pipeline/04_gold_features_model.py", []))
+    steps.append(("Budget Optimization",   "pipeline/05_budget_optimizer.py",    []))
 
-    # Out-of-time validation (optional — runs after gold, before EDA)
-    if args.validate:
+    # Out-of-time validation
+    if not args.no_validate:
         steps.append(("Out-of-Time Validation", "pipeline/06_validation.py", []))
 
-    # Comparison analysis plots (optional — runs after gold)
-    if args.compare:
+    # Comparison analysis plots
+    if not args.no_compare:
         steps.append(("Comparison Analysis Plots", "pipeline/07_comparison_plots.py", []))
 
-    steps.append(("EDA Dashboard", "pipeline/05_eda.py", []))
+    steps.append(("EDA Dashboard",         "pipeline/05_eda.py",                 []))
+    steps.append(("SQLite DB Compilation", "app/services/db_service.py",         []))
 
     # -----------------------------------------------------------------------
     # Print plan
@@ -131,16 +133,19 @@ Examples:
     print(f"\n  Total elapsed:  {total_elapsed:.1f}s ({total_elapsed/60:.1f} min)")
     print(f"\n  Outputs:")
     print(f"    Predictions    -> output/AI_ACES_predictions.csv")
+    print(f"    Allocations    -> output/ai_aces_budget_allocations.csv")
     print(f"    Gold table     -> pipeline/gold/gold_features.parquet")
     print(f"    Rejected       -> pipeline/rejected/*.csv")
     print(f"    DQ manifest    -> pipeline/rejected/dq_manifest.json")
     print(f"    Cens. analysis -> output/censoring_analysis.csv")
-    if args.validate:
+    if not args.no_validate:
         print(f"    Validation     -> output/validation_report.csv")
-    if args.compare:
+        print(f"    Val Curves     -> output/validation_curves.png")
+    if not args.no_compare:
         print(f"    Comparison     -> output/comparison_analysis.png")
     print(f"    EDA dashboard  -> output/eda_dashboard.png")
-    print(f"    EDA scatter    -> output/eda_censoring_scatter.png\n")
+    print(f"    EDA scatter    -> output/eda_censoring_scatter.png")
+    print(f"    SQLite DB      -> data/outlet_intelligence.db\n")
 
 
 if __name__ == "__main__":

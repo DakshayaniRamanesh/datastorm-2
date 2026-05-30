@@ -1,0 +1,374 @@
+{% extends 'base.html' %}
+
+{% block content %}
+<div class="container-fluid p-0">
+    <!-- Back Navigation -->
+    <div class="mb-3">
+        <a href="{{ url_for('outlets.view_outlets') }}" class="btn-glass text-white py-1 px-3">
+            <i class="fa-solid fa-chevron-left me-1"></i> Back to Explorer
+        </a>
+    </div>
+
+    <!-- Header -->
+    <div class="d-flex justify-content-between align-items-start mb-4">
+        <div>
+            <h1 class="h2 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 700;">Outlet: {{ outlet.Outlet_ID }}</h1>
+            <p class="text-muted mb-0">Audit deep-dive: latent potential, spatial catchment buffers, and explainable AI insights.</p>
+        </div>
+        <div class="d-flex gap-2">
+            <span class="badge-glass badge-blue">{{ outlet.province }}</span>
+            <span class="badge-glass badge-gold"><i class="fa-solid fa-shield-halved me-1"></i> Checked by AI ACES</span>
+        </div>
+    </div>
+
+    <!-- KPI Summary Row -->
+    <div class="row g-4 mb-4">
+        <div class="col-md-3">
+            <div class="glass-panel kpi-card">
+                <div class="kpi-title">Historical Sales (Median)</div>
+                <div class="kpi-value">{{ "{:,.1f}".format(outlet.hist_median_vol) }} L</div>
+                <div class="kpi-sub">
+                    <span>Baseline Monthly Volume</span>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="glass-panel kpi-card">
+                <div class="kpi-title">Predicted Potential (Jan 26)</div>
+                <div class="kpi-value text-success" style="color: var(--color-green) !important;">{{ "{:,.1f}".format(outlet.Maximum_Monthly_Liters) }} L</div>
+                <div class="kpi-sub">
+                    <span class="kpi-trend-up">+{{ ((outlet.potential_multiplier - 1) * 100) | round(1) }}% potential</span>
+                    <span>uplift gap</span>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="glass-panel kpi-card">
+                <div class="kpi-title">Censoring Constraint</div>
+                <div class="kpi-value">
+                    {% if outlet.censoring_score > 0.50 %}
+                    <span class="text-danger">{{ "%.2f" | format(outlet.censoring_score) }}</span>
+                    {% elif outlet.censoring_score > 0.20 %}
+                    <span class="text-warning">{{ "%.2f" | format(outlet.censoring_score) }}</span>
+                    {% else %}
+                    <span class="text-success">{{ "%.2f" | format(outlet.censoring_score) }}</span>
+                    {% endif %}
+                </div>
+                <div class="kpi-sub">
+                    <span>Plateau / Supply cap risk</span>
+                </div>
+            </div>
+        </div>
+        <div class="col-md-3">
+            <div class="glass-panel kpi-card">
+                <div class="kpi-title">Recommended Trade Spend</div>
+                <div class="kpi-value text-info">
+                    {% if outlet.Trade_Spend_LKR > 0 %}
+                    LKR {{ "{:,.0f}".format(outlet.Trade_Spend_LKR) }}
+                    {% else %}
+                    LKR 0
+                    {% endif %}
+                </div>
+                <div class="kpi-sub">
+                    {% if outlet.Trade_Spend_LKR > 0 %}
+                    <span class="text-success"><i class="fa-solid fa-chart-line me-1"></i> Expected Lift: +{{ outlet.Expected_Lift }} L</span>
+                    {% else %}
+                    <span>No allocation recommended</span>
+                    {% endif %}
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Split Grid: Left Details & History | Right Map & Claude Advisor -->
+    <div class="row g-4 mb-4">
+        <!-- Left Side: Profile, History & SHAP -->
+        <div class="col-lg-7">
+            <!-- Profile -->
+            <div class="glass-panel p-4 mb-4">
+                <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Store Profile & Spatial Indexes</h3>
+                <div class="row g-3">
+                    <div class="col-sm-4">
+                        <div class="text-muted small">Outlet Type</div>
+                        <div class="font-weight-bold">{{ outlet.Outlet_Type }}</div>
+                    </div>
+                    <div class="col-sm-4">
+                        <div class="text-muted small">Outlet Size</div>
+                        <div class="font-weight-bold">{{ outlet.Outlet_Size }}</div>
+                    </div>
+                    <div class="col-sm-4">
+                        <div class="text-muted small">Cooler Count</div>
+                        <div class="font-weight-bold"><i class="fa-solid fa-snowflake text-info me-1"></i> {{ outlet.Cooler_Count }} cooler(s)</div>
+                    </div>
+                    <div class="col-sm-4">
+                        <div class="text-muted small">Primary Distributor</div>
+                        <div class="font-weight-bold"><span class="badge-glass badge-blue">{{ outlet.primary_dist }}</span></div>
+                    </div>
+                    <div class="col-sm-4">
+                        <div class="text-muted small">Combined Catchment Score</div>
+                        <div class="font-weight-bold">
+                            {% if outlet.combined_catchment_score is defined and outlet.combined_catchment_score is not none %}
+                            {{ "%.3f" | format(outlet.combined_catchment_score) }}
+                            {% else %}
+                            0.000
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="col-sm-4">
+                        <div class="text-muted small">Market Saturation Index</div>
+                        <div class="font-weight-bold">
+                            {% if outlet.market_saturation_index is defined and outlet.market_saturation_index is not none %}
+                            {{ "%.3f" | format(outlet.market_saturation_index) }}
+                            {% else %}
+                            0.000
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Historical Performance chart -->
+            <div class="glass-panel p-4 mb-4">
+                <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Historical Volume Trend & Latent Potential</h3>
+                <div id="history-chart" style="height: 280px; width: 100%;"></div>
+            </div>
+
+            <!-- SHAP Explainability waterfall chart -->
+            <div class="glass-panel p-4">
+                <div class="d-flex justify-content-between align-items-center mb-3">
+                    <h3 class="h6 mb-0 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Explainable AI: Local SHAP Feature Contributions</h3>
+                    <span class="badge-glass badge-blue" style="font-size: 10px;">LGBM Tree Explainer</span>
+                </div>
+                <div id="shap-chart" style="height: 380px; width: 100%;"></div>
+            </div>
+        </div>
+
+        <!-- Right Side: Leaflet Map & Claude Narrative Advisor -->
+        <div class="col-lg-5">
+            <!-- Competitor Leaflet Map -->
+            <div class="glass-panel p-4 mb-4">
+                <h3 class="h6 mb-2 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Hyperlocal Competitor Saturation Map</h3>
+                <p class="text-muted small mb-3">Showing neighboring outlets and OSM retailers within 1.5 km catchment radius buffer.</p>
+                <div id="competitor-map" style="height: 380px; border-radius: 8px;"></div>
+            </div>
+
+            <!-- Claude AI Senior Advisor -->
+            <div class="glass-panel p-4" style="background: linear-gradient(135deg, rgba(22, 29, 49, 0.8) 0%, rgba(94, 0, 249, 0.05) 100%);">
+                <div class="d-flex align-items-center gap-2 mb-3">
+                    <i class="fa-solid fa-brain text-purple" style="color: var(--color-purple); font-size: 20px;"></i>
+                    <h3 class="h6 mb-0 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Senior Sales Analytics Advisor Narrative</h3>
+                </div>
+                
+                <div class="mb-3 p-3 rounded" style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-glass);">
+                    <h4 class="text-success small font-weight-bold uppercase mb-1"><i class="fa-solid fa-chart-line me-1"></i> Demand Potential drivers</h4>
+                    <p class="small mb-0 text-white" style="line-height: 1.55;">{{ narrative.WhyHigh }}</p>
+                </div>
+                
+                <div class="mb-3 p-3 rounded" style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-glass);">
+                    <h4 class="text-warning small font-weight-bold uppercase mb-1"><i class="fa-solid fa-circle-exclamation me-1"></i> Supply Bottlenecks & Constraints</h4>
+                    <p class="small mb-0 text-white" style="line-height: 1.55;">{{ narrative.WhyLow }}</p>
+                </div>
+                
+                <div class="row g-3 mb-3">
+                    <div class="col-sm-6">
+                        <div class="p-3 rounded h-100" style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-glass);">
+                            <h4 class="text-info small font-weight-bold uppercase mb-1"><i class="fa-solid fa-lightbulb me-1"></i> Opportunities</h4>
+                            <p class="small mb-0 text-white" style="line-height: 1.5; font-size: 11.5px;">{{ narrative.Opportunities }}</p>
+                        </div>
+                    </div>
+                    <div class="col-sm-6">
+                        <div class="p-3 rounded h-100" style="background: rgba(255,255,255,0.02); border: 1px solid var(--border-glass);">
+                            <h4 class="text-danger small font-weight-bold uppercase mb-1"><i class="fa-solid fa-circle-xmark me-1"></i> Risk Factors</h4>
+                            <p class="small mb-0 text-white" style="line-height: 1.5; font-size: 11.5px;">{{ narrative.Risks }}</p>
+                        </div>
+                    </div>
+                </div>
+
+                <div class="p-3 rounded" style="background: rgba(0, 168, 255, 0.05); border: 1px solid rgba(0, 168, 255, 0.25);">
+                    <h4 class="text-info small font-weight-bold uppercase mb-1"><i class="fa-solid fa-square-check me-1"></i> Recommended Actions</h4>
+                    <p class="small mb-0 text-white" style="line-height: 1.55; font-weight: 500;">{{ narrative.RecommendedActions }}</p>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.addEventListener("DOMContentLoaded", function() {
+        // ----------------------------------------------------
+        // Initialize Plotly Historical Sales Chart
+        // ----------------------------------------------------
+        const historyData = {{ history | tojson }};
+        const dates = historyData.map(h => `${h.Year}-${h.Month.toString().padStart(2, '0')}`);
+        const volumes = historyData.map(h => h.volume);
+        
+        const traceSales = {
+            x: dates,
+            y: volumes,
+            name: 'Historical Volume',
+            type: 'scatter',
+            mode: 'lines+markers',
+            line: { color: '#00a8ff', width: 2.5 },
+            marker: { color: '#00a8ff', size: 5 },
+            fill: 'tozeroy',
+            fillcolor: 'rgba(0, 168, 255, 0.05)'
+        };
+        
+        // Add horizontal potential line
+        const potentialVal = {{ outlet.Maximum_Monthly_Liters }};
+        const tracePotential = {
+            x: [dates[0], dates[dates.length - 1]],
+            y: [potentialVal, potentialVal],
+            name: 'Predicted Potential',
+            type: 'scatter',
+            mode: 'lines',
+            line: { color: '#00e676', width: 2, dash: 'dash' }
+        };
+        
+        const histLayout = {
+            paper_bgcolor: 'rgba(0,0,0,0)',
+            plot_bgcolor: 'rgba(0,0,0,0)',
+            font: { color: '#9ca3af', family: 'Inter, sans-serif', size: 10 },
+            margin: { l: 50, r: 10, t: 10, b: 35 },
+            legend: { orientation: 'h', y: -0.2, x: 0.2 },
+            xaxis: { gridcolor: 'rgba(255,255,255,0.05)' },
+            yaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'Liters' }
+        };
+        
+        Plotly.newPlot('history-chart', [traceSales, tracePotential], histLayout, {displayModeBar: false});
+
+        // ----------------------------------------------------
+        // Initialize Plotly SHAP Waterfall Chart
+        // ----------------------------------------------------
+        const explanation = {{ explanation | tojson }};
+        if (explanation && explanation.contributions) {
+            // Sort contributions, display top 8, sum others
+            const topN = 7;
+            const sortedContribs = explanation.contributions;
+            
+            const displayNames = [];
+            const displayValues = [];
+            let otherSum = 0;
+            
+            for (let i = 0; i < sortedContribs.length; i++) {
+                if (i < topN) {
+                    // Prettify feature names
+                    let label = sortedContribs[i].feature
+                        .replace(/_gaussian_score/g, '')
+                        .replace(/_/g, ' ')
+                        .replace(/\b\w/g, c => c.toUpperCase());
+                    displayNames.push(label);
+                    displayValues.push(sortedContribs[i].shap_value);
+                } else {
+                    otherSum += sortedContribs[i].shap_value;
+                }
+            }
+            
+            if (otherSum !== 0) {
+                displayNames.push("Other Features");
+                displayValues.push(otherSum);
+            }
+            
+            // Build Plotly Waterfall structure
+            // base value is start point
+            const startVal = explanation.base_value;
+            const finalVal = explanation.prediction_log;
+            
+            // Calculate absolute positions for waterfall
+            const xData = ['Base Value', ...displayNames, 'Final Prediction Log'];
+            const yDelta = [startVal, ...displayValues, finalVal];
+            
+            const measure = ['absolute', ...Array(displayNames.length).fill('relative'), 'total'];
+            
+            const traceShap = {
+                type: "waterfall",
+                orientation: "v",
+                measure: measure,
+                x: xData,
+                textposition: "outside",
+                y: yDelta,
+                connector: { line: { color: "rgba(255,255,255,0.2)", width: 1 } },
+                decreasing: { marker: { color: "#ff1744" } },
+                increasing: { marker: { color: "#00e676" } },
+                totals: { marker: { color: "#00a8ff" } }
+            };
+            
+            const shapLayout = {
+                paper_bgcolor: 'rgba(0,0,0,0)',
+                plot_bgcolor: 'rgba(0,0,0,0)',
+                font: { color: '#9ca3af', family: 'Inter, sans-serif', size: 9 },
+                margin: { l: 40, r: 10, t: 10, b: 60 },
+                xaxis: { gridcolor: 'rgba(255,255,255,0.05)', tickangle: 35 }
+            };
+            
+            Plotly.newPlot('shap-chart', [traceShap], shapLayout, {displayModeBar: false});
+        }
+
+        // ----------------------------------------------------
+        // Initialize Leaflet Competitors Map
+        // ----------------------------------------------------
+        const tLat = {{ outlet.Latitude }};
+        const tLon = {{ outlet.Longitude }};
+        const competitors = {{ competitors | tojson }};
+        
+        const map = L.map('competitor-map', {
+            zoomControl: true,
+            maxZoom: 17
+        }).setView([tLat, tLon], 14);
+        
+        // Add dark CartoDB tiles
+        L.tileLayer('https://{s}.basemaps.cartocdn.com/dark_all/{z}/{x}/{y}{r}.png', {
+            attribution: '&copy; CartoDB &copy; OpenStreetMap contributors',
+            subdomains: 'abcd'
+        }).addTo(map);
+        
+        // Highlight outlet catchment radius (1.5 km)
+        L.circle([tLat, tLon], {
+            color: '#00a8ff',
+            fillColor: '#00a8ff',
+            fillOpacity: 0.04,
+            radius: 1500,
+            weight: 1.5,
+            dashArray: '4, 4'
+        }).addTo(map);
+
+        // Custom marker icons
+        const iconOutlet = L.divIcon({
+            html: '<i class="fa-solid fa-location-dot" style="color: #ffd600; font-size: 26px;"></i>',
+            iconSize: [26, 26],
+            iconAnchor: [13, 26],
+            popupAnchor: [0, -26],
+            className: 'custom-leaflet-icon'
+        });
+
+        const iconCompetitor = L.divIcon({
+            html: '<i class="fa-solid fa-location-pin" style="color: #ff1744; font-size: 20px;"></i>',
+            iconSize: [20, 20],
+            iconAnchor: [10, 20],
+            popupAnchor: [0, -20],
+            className: 'custom-leaflet-icon'
+        });
+
+        const iconNeighbor = L.divIcon({
+            html: '<i class="fa-solid fa-store" style="color: #00a8ff; font-size: 20px;"></i>',
+            iconSize: [20, 20],
+            iconAnchor: [10, 20],
+            popupAnchor: [0, -20],
+            className: 'custom-leaflet-icon'
+        });
+
+        // Add Target Outlet Pin
+        L.marker([tLat, tLon], {icon: iconOutlet})
+            .bindPopup(`<strong>Outlet ID: {{ outlet.Outlet_ID }}</strong><br>Median Volume: {{ outlet.hist_median_vol }} L`)
+            .addTo(map);
+
+        // Add Competitors
+        competitors.forEach(c => {
+            const icon = c.type === "OSM Retailer" ? iconCompetitor : iconNeighbor;
+            L.marker([c.lat, c.lon], {icon: icon})
+                .bindPopup(`<strong>${c.name}</strong><br>Type: ${c.type}<br>Distance: ${c.distance_m} m`)
+                .addTo(map);
+        });
+    });
+</script>
+{% endblock %}
