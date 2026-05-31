@@ -30,12 +30,14 @@ PROVINCE_PREFIXES = ("DIST_W", "DIST_C", "DIST_S", "DIST_NW")
 PROVINCES_GEOJSON = (
     Path(__file__).parent.parent / "static" / "data" / "lk_provinces_4.geojson"
 )
+INPUT_COORDS_PATH = Path(__file__).parent.parent.parent / "input" / "outlet_coordinates.csv"
 
 
 class SpatialService:
     def __init__(self, db_service: DBService):
         self.db = db_service
         self._osm_competitors: Optional[pd.DataFrame] = None
+        self._outlet_coords: Optional[pd.DataFrame] = None
 
     def _load_osm_competitors(self) -> pd.DataFrame:
         """Load cached OSM competitor coordinates (real data only)."""
@@ -55,15 +57,31 @@ class SpatialService:
         logger.info("Loaded %s OSM competitor map points.", f"{len(self._osm_competitors):,}")
         return self._osm_competitors
 
+    def _load_outlet_coordinates(self) -> pd.DataFrame:
+        if self._outlet_coords is not None:
+            return self._outlet_coords
+
+        if not INPUT_COORDS_PATH.exists():
+            logger.warning("Outlet coordinate file not found at %s", INPUT_COORDS_PATH)
+            self._outlet_coords = pd.DataFrame(columns=["Outlet_ID", "Latitude", "Longitude"])
+            return self._outlet_coords
+
+        df = pd.read_csv(INPUT_COORDS_PATH, dtype={"Outlet_ID": str})
+        df["Latitude"] = pd.to_numeric(df["Latitude"], errors="coerce")
+        df["Longitude"] = pd.to_numeric(df["Longitude"], errors="coerce")
+        self._outlet_coords = df.dropna(subset=["Latitude", "Longitude"]).copy()
+        return self._outlet_coords
+
     def get_all_outlet_map_points(self, four_provinces_only: bool = True) -> List[Dict[str, Any]]:
         """Fetch outlet coordinates for Leaflet heatmap (optionally scoped to 4 provinces)."""
-        query = """
+        rows = self.db.execute_query(
+            """
             SELECT Outlet_ID, Latitude, Longitude, Maximum_Monthly_Liters,
                    hist_median_vol, censoring_score, primary_dist
             FROM outlets
             WHERE Latitude IS NOT NULL AND Longitude IS NOT NULL
-        """
-        rows = self.db.execute_query(query)
+            """
+        )
         if not four_provinces_only:
             return rows
         filtered = []
@@ -73,6 +91,66 @@ class SpatialService:
             if prefix in PROVINCE_PREFIXES:
                 filtered.append(r)
         return filtered
+
+    def get_all_outlet_map_points_from_csv(self) -> List[Dict[str, Any]]:
+        """Load outlet coordinates from the input CSV and attach prediction metadata."""
+        coords = self._load_outlet_coordinates()
+        if coords.empty:
+            return []
+
+        rows = self.db.execute_query(
+            "SELECT Outlet_ID, Maximum_Monthly_Liters, hist_median_vol, censoring_score, primary_dist FROM outlets"
+        )
+        metadata = {r["Outlet_ID"]: r for r in rows}
+
+        points: List[Dict[str, Any]] = []
+        for _, row in coords.iterrows():
+            outlet_id = str(row["Outlet_ID"])
+            point = {
+                "Outlet_ID": outlet_id,
+                "Latitude": float(row["Latitude"]),
+                "Longitude": float(row["Longitude"]),
+            }
+            meta = metadata.get(outlet_id)
+            if meta:
+                point["Maximum_Monthly_Liters"] = meta.get("Maximum_Monthly_Liters") or 0.0
+                point["hist_median_vol"] = meta.get("hist_median_vol") or 0.0
+                point["censoring_score"] = meta.get("censoring_score") or 0.0
+                point["primary_dist"] = meta.get("primary_dist") or ""
+            else:
+                point["Maximum_Monthly_Liters"] = 0.0
+                point["hist_median_vol"] = 0.0
+                point["censoring_score"] = 0.0
+                point["primary_dist"] = ""
+            points.append(point)
+
+        return points
+
+    def get_province_bounds_from_outlets(self) -> Dict[str, Dict[str, Any]]:
+        """Compute map bounds per province from outlet coordinates (Sri Lanka)."""
+        rows = self.get_all_outlet_map_points_from_csv()
+        buckets: Dict[str, List[Dict[str, float]]] = {}
+        for r in rows:
+            dist = r.get("primary_dist") or ""
+            prefix = "_".join(dist.split("_")[:2])
+            if prefix not in PROVINCE_PREFIXES:
+                continue
+            lat = float(r["Latitude"])
+            lon = float(r["Longitude"])
+            if not (5.0 <= lat <= 10.5 and 79.0 <= lon <= 82.5):
+                continue
+            buckets.setdefault(prefix, []).append({"lat": lat, "lon": lon})
+
+        out: Dict[str, Dict[str, Any]] = {}
+        for prefix, pts in buckets.items():
+            lats = [p["lat"] for p in pts]
+            lons = [p["lon"] for p in pts]
+            out[prefix] = {
+                "bounds": [[min(lats), min(lons)], [max(lats), max(lons)]],
+                "center": [sum(lats) / len(lats), sum(lons) / len(lons)],
+                "outlets": len(pts),
+            }
+        return out
 
     def _nearby_osm_competitors(
         self, t_lat: float, t_lon: float, radius_m: float
@@ -105,40 +183,6 @@ class SpatialService:
                     "volume": 0.0,
                 })
         return results
-
-    def get_province_bounds_from_outlets(self) -> Dict[str, Dict[str, Any]]:
-        """Compute map bounds per province from outlet coordinates (Sri Lanka)."""
-        rows = self.db.execute_query(
-            """
-            SELECT primary_dist, Latitude, Longitude
-            FROM outlets
-            WHERE Latitude IS NOT NULL AND Longitude IS NOT NULL
-            """
-        )
-        buckets: Dict[str, List[Dict[str, float]]] = {}
-        for r in rows:
-            dist = r.get("primary_dist") or ""
-            prefix = "_".join(dist.split("_")[:2])
-            if prefix not in PROVINCE_PREFIXES:
-                continue
-            lat, lon = float(r["Latitude"]), float(r["Longitude"])
-            if not (5.0 <= lat <= 10.5 and 79.0 <= lon <= 82.5):
-                continue
-            buckets.setdefault(prefix, []).append({"lat": lat, "lon": lon})
-
-        out: Dict[str, Dict[str, Any]] = {}
-        for prefix, pts in buckets.items():
-            lats = [p["lat"] for p in pts]
-            lons = [p["lon"] for p in pts]
-            out[prefix] = {
-                "bounds": [
-                    [min(lats), min(lons)],
-                    [max(lats), max(lons)],
-                ],
-                "center": [sum(lats) / len(lats), sum(lons) / len(lons)],
-                "outlets": len(pts),
-            }
-        return out
 
     def get_nearby_competitors(self, outlet_id: str, radius_m: float = 1500.0) -> List[Dict[str, Any]]:
         """Find competitor outlets and OSM retailers within radius_m of the target outlet."""

@@ -18,8 +18,8 @@ import pandas as pd
 from poi_catchment import enrich_catchment_features
 
 # Uplift weights — recalibrate via pipeline/calibrate_heuristic.py (walk-forward ceiling targets)
-CENSORING_UPLIFT = 1.0337
-CATCHMENT_UPLIFT = 0.9769
+CENSORING_UPLIFT = 1.0460
+CATCHMENT_UPLIFT = 0.9872
 
 # Two-regime blend: censoring_score in [0, BLEND_START] -> baseline; >= BLEND_FULL -> full latent
 REGIME_BLEND_START = 0.15

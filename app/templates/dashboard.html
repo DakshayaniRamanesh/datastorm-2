@@ -141,32 +141,6 @@
     </div>
 </div>
 
-<!-- Feature Importance + Censoring -->
-<div class="dash-grid-12 dash-row-bottom">
-    <div class="dash-col-8">
-        <div class="dash-card dash-card--feature-full">
-            <div class="dash-card-header">
-                <h2 class="dash-card-title">Feature Importance</h2>
-                <span class="dash-card-subtitle">Top drivers of predicted outlet potential (mean |SHAP|)</span>
-            </div>
-            <div class="dash-card-body dash-card-body--compact">
-                <div id="shap-chart" class="chart-box chart-box--shap"></div>
-            </div>
-        </div>
-    </div>
-    <div class="dash-col-4">
-        <div class="dash-card">
-            <div class="dash-card-header"><h2 class="dash-card-title">Censoring Distribution</h2></div>
-            <div class="dash-card-body dash-card-body--compact">
-                <div class="censoring-chart-wrap">
-                    <div id="censoring-chart" class="chart-box chart-box--lg"></div>
-                    <div class="censoring-center-label" id="censoring-center-label"></div>
-                </div>
-            </div>
-        </div>
-    </div>
-</div>
-
 <!-- Tables Row -->
 <div class="dash-grid-12 dash-row-tables">
     <div class="dash-col-6">
@@ -251,9 +225,6 @@ document.addEventListener("DOMContentLoaded", function () {
     const provs = {{ provinces | tojson }};
     const potentialDist = {{ potential_dist | tojson }};
     const segmentation = {{ segmentation | tojson }};
-    const shapData = {{ shap_importance | tojson }};
-    const censoringDist = {{ censoring_dist | tojson }};
-    const lowRiskPct = {{ exec_kpis.low_risk_pct | tojson }};
 
     const PRIMARY = "#3b82f6";
     const CB_PALETTE = ["#0173B2", "#DE8F05", "#029E73", "#CC78BC", "#CA9161", "#949494", "#ECE133"];
@@ -268,17 +239,15 @@ document.addEventListener("DOMContentLoaded", function () {
     };
 
     const PROVINCE_CONFIG = [
-        { name: "Western Province", short: "Western", prefix: "DIST_W", mapId: "map-western", color: "#3b82f6" },
-        { name: "Central Province", short: "Central", prefix: "DIST_C", mapId: "map-central", color: "#16a34a" },
+        { name: "Western Province",       short: "Western",       prefix: "DIST_W",  mapId: "map-western",      color: "#3b82f6" },
+        { name: "Central Province",       short: "Central",       prefix: "DIST_C",  mapId: "map-central",      color: "#16a34a" },
         { name: "North Western Province", short: "North Western", prefix: "DIST_NW", mapId: "map-northwestern", color: "#64748b" },
-        { name: "Southern Province", short: "Southern", prefix: "DIST_S", mapId: "map-southern", color: "#ea580c" }
+        { name: "Southern Province",      short: "Southern",      prefix: "DIST_S",  mapId: "map-southern",     color: "#ea580c" }
     ];
 
     const PROVINCE_CHART_COLORS = {
-        "Western": "#3b82f6",
-        "Central": "#16a34a",
-        "North Western": "#64748b",
-        "Southern": "#ea580c"
+        "Western": "#3b82f6", "Central": "#16a34a",
+        "North Western": "#64748b", "Southern": "#ea580c"
     };
 
     const provinceMaps = [];
@@ -286,8 +255,6 @@ document.addEventListener("DOMContentLoaded", function () {
     initProvinceChart(provs);
     initPotentialDist(potentialDist);
     initSegmentChart(segmentation);
-    initShapChart(shapData);
-    initCensoringChart(censoringDist, lowRiskPct);
     loadProvinceMaps();
 
     function hideMapLoading() {
@@ -297,20 +264,19 @@ document.addEventListener("DOMContentLoaded", function () {
 
     function loadProvinceMaps() {
         Promise.all([
-            fetch("{{ url_for('dashboard.api_map_points') }}").then(r => r.json()),
             fetch("{{ url_for('dashboard.api_province_map_bounds') }}").then(r => r.json()),
-            fetch("{{ url_for('static', filename='data/western.geojson') }}").then(r => r.json()),
-            fetch("{{ url_for('dashboard.api_western_outlets') }}").then(r => r.json())
+            fetch("{{ url_for('dashboard.api_province_boundaries') }}").then(r => r.json()),
+            fetch("{{ url_for('dashboard.api_province_outlets') }}").then(r => r.json())
         ])
-        .then(([points, bounds, westernBoundary, westernOutlets]) => {
-            initProvinceMaps(points, bounds || {}, westernOutlets || []);
-            initWesternBoundary(westernBoundary);
+        .then(([bounds, boundaries, outlets]) => {
+            initProvinceMaps(bounds || {}, outlets || {});
+            PROVINCE_CONFIG.forEach(cfg => initProvinceBoundary(cfg.mapId, boundaries[cfg.prefix]));
             hideMapLoading();
             scheduleMapResize();
         })
         .catch(err => {
             console.error("Map load failed:", err);
-            initProvinceMaps([], {}, []);
+            initProvinceMaps({}, {});
             hideMapLoading();
             const el = document.getElementById("province-map-loading");
             if (el) { el.textContent = "Map data unavailable."; el.classList.remove("is-hidden"); }
@@ -329,19 +295,12 @@ document.addEventListener("DOMContentLoaded", function () {
         return provinceMaps.find(m => m._provinceId === mapId);
     }
 
-    function initWesternBoundary(boundaryGeoJSON) {
+    function initProvinceBoundary(mapId, boundaryGeoJSON) {
         if (!boundaryGeoJSON || !boundaryGeoJSON.features || !boundaryGeoJSON.features.length) return;
-        const map = getMapById("map-western");
+        const map = getMapById(mapId);
         if (!map || typeof L.geoJSON !== "function") return;
-
         L.geoJSON(boundaryGeoJSON, {
-            style: {
-                color: "#1d4ed8",
-                weight: 2,
-                opacity: 0.85,
-                fillOpacity: 0.08,
-                fillColor: "#bfdbfe"
-            },
+            style: { color: "#1d4ed8", weight: 2, opacity: 0.85, fillOpacity: 0.08, fillColor: "#bfdbfe" },
             interactive: false
         }).addTo(map);
     }
@@ -351,14 +310,10 @@ document.addEventListener("DOMContentLoaded", function () {
         let r, g, b;
         if (t < 0.5) {
             const s = t * 2;
-            r = Math.round(220 + (255 - 220) * s);
-            g = Math.round(38 + (165 - 38) * s);
-            b = 38;
+            r = Math.round(220 + (255 - 220) * s); g = Math.round(38 + (165 - 38) * s); b = 38;
         } else {
             const s = (t - 0.5) * 2;
-            r = Math.round(255 - (255 - 34) * s);
-            g = Math.round(165 + (134 - 165) * s);
-            b = 38;
+            r = Math.round(255 - (255 - 34) * s); g = Math.round(165 + (134 - 165) * s); b = 38;
         }
         return `rgb(${r}, ${g}, ${b})`;
     }
@@ -367,81 +322,34 @@ document.addEventListener("DOMContentLoaded", function () {
         return 4 + Math.round(6 * Math.max(0, Math.min(1, intensity)));
     }
 
-    function addWesternOutletMarkers(map, points) {
+    function addProvinceOutletMarkers(map, points) {
         if (!points || !points.length) return;
-        
-        const markerGroup = L.featureGroup();
-        
+        const markerGroup = L.markerClusterGroup
+            ? L.markerClusterGroup({ disableClusteringAtZoom: 15, maxClusterRadius: 50 })
+            : L.featureGroup();
         points.forEach(p => {
-            const lat = parseFloat(p.Latitude);
-            const lon = parseFloat(p.Longitude);
+            const lat = parseFloat(p.Latitude), lon = parseFloat(p.Longitude);
             if (!lat || !lon || isNaN(lat) || isNaN(lon)) return;
-            
             const potential = Number(p.Maximum_Monthly_Liters || 0);
             const intensity = Math.min(1, potential / 1200);
-            
-            const marker = L.circleMarker([lat, lon], {
-                radius: getPotentialRadius(intensity),
-                weight: 1.5,
-                opacity: 0.9,
-                fillOpacity: 0.85,
-                fillColor: getPotentialColor(intensity),
-                color: "#1f2937"
+            L.circleMarker([lat, lon], {
+                radius: getPotentialRadius(intensity), weight: 1.5, opacity: 0.9,
+                fillOpacity: 0.85, fillColor: getPotentialColor(intensity), color: "#1f2937"
             }).bindPopup(
-                `<strong>${p.Outlet_ID || 'Outlet'}</strong><br>` +
-                `Potential: ${potential.toLocaleString()} L<br>` +
+                `<strong>${p.Outlet_ID || 'Outlet'}</strong><br>Potential: ${potential.toLocaleString()} L<br>` +
                 `<small>Lat: ${lat.toFixed(4)}, Lon: ${lon.toFixed(4)}</small>`
-            );
-            
-            markerGroup.addLayer(marker);
+            ).addTo(markerGroup);
         });
-        
-        if (typeof L.markerClusterGroup === 'function') {
-            const clusteredGroup = L.markerClusterGroup({
-                disableClusteringAtZoom: 15,
-                maxClusterRadius: 50
-            });
-            points.forEach(p => {
-                const lat = parseFloat(p.Latitude);
-                const lon = parseFloat(p.Longitude);
-                if (!lat || !lon || isNaN(lat) || isNaN(lon)) return;
-                const potential = Number(p.Maximum_Monthly_Liters || 0);
-                const intensity = Math.min(1, potential / 1200);
-                const marker = L.circleMarker([lat, lon], {
-                    radius: getPotentialRadius(intensity),
-                    weight: 1.5,
-                    opacity: 0.9,
-                    fillOpacity: 0.85,
-                    fillColor: getPotentialColor(intensity),
-                    color: "#1f2937"
-                }).bindPopup(`<strong>${p.Outlet_ID || 'Outlet'}</strong><br>Potential: ${potential.toLocaleString()} L`);
-                clusteredGroup.addLayer(marker);
-            });
-            map.addLayer(clusteredGroup);
-        } else {
-            markerGroup.addTo(map);
-        }
+        map.addLayer(markerGroup);
     }
 
-    function getProvincePrefix(dist) {
-        return (dist || "").split("_").slice(0, 2).join("_");
-    }
-
-    function initProvinceMaps(mapPoints, boundsByPrefix, westernOutlets) {
+    function initProvinceMaps(boundsByPrefix, provinceOutlets) {
         const legendEl = document.getElementById("map-legend");
         if (legendEl) legendEl.innerHTML = "";
-
         PROVINCE_CONFIG.forEach(cfg => {
             try {
-                let provPoints = [];
-                let bounds = boundsByPrefix[cfg.prefix];
-                
-                if (cfg.short === "Western") {
-                    provPoints = westernOutlets || [];
-                } else {
-                    provPoints = (mapPoints || []).filter(p => getProvincePrefix(p.primary_dist) === cfg.prefix);
-                }
-                
+                const provPoints = provinceOutlets[cfg.prefix] || [];
+                const bounds = boundsByPrefix[cfg.prefix];
                 initSingleProvinceMap(cfg, provPoints, bounds);
                 if (legendEl) {
                     const s = document.createElement("span");
@@ -450,73 +358,43 @@ document.addEventListener("DOMContentLoaded", function () {
                         cfg.short + ' <span class="map-legend-count">(' + provPoints.length.toLocaleString() + ' outlets)</span>';
                     legendEl.appendChild(s);
                 }
-            } catch (e) {
-                console.error("Map init failed for", cfg.short, e);
-            }
+            } catch (e) { console.error("Map init failed for", cfg.short, e); }
         });
     }
 
     function initSingleProvinceMap(cfg, points, boundsMeta) {
         const el = document.getElementById(cfg.mapId);
         if (!el || el._leaflet_map) return;
-
         const map = L.map(cfg.mapId, {
-            zoomControl: true,
-            attributionControl: false,
-            preferCanvas: true,
-            dragging: true,
-            scrollWheelZoom: true,
-            doubleClickZoom: true,
-            touchZoom: true
+            zoomControl: true, attributionControl: false, preferCanvas: true,
+            dragging: true, scrollWheelZoom: true, doubleClickZoom: true, touchZoom: true
         });
         el._leaflet_map = map;
         map._provinceId = cfg.mapId;
-
         L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
             subdomains: "abcd", maxZoom: 18
         }).addTo(map);
-
-        const validPoints = points
+        const provincePoints = (points || [])
             .map(p => {
-                const lat = parseFloat(p.Latitude);
-                const lon = parseFloat(p.Longitude);
-                if (!lat || !lon || lat < 5 || lat > 11 || lon < 79 || lon > 83) return null;
+                const lat = parseFloat(p.Latitude), lon = parseFloat(p.Longitude);
+                if (!lat || !lon || isNaN(lat) || lat < 5 || lat > 11 || lon < 79 || lon > 83) return null;
                 return { ...p, Latitude: lat, Longitude: lon, potential: Number(p.Maximum_Monthly_Liters || 0) };
-            })
-            .filter(Boolean);
-
-        if (cfg.short === "Western") {
-            const westernPoints = validPoints.filter(p => {
-                const dist = p.primary_dist || "";
-                return dist.startsWith("DIST_W");
-            });
-            addWesternOutletMarkers(map, westernPoints);
-        } else {
-            const heatData = validPoints.map(p => [p.Latitude, p.Longitude, Math.min(1, p.potential / 1800)]);
-            if (heatData.length && typeof L.heatLayer === "function") {
-                L.heatLayer(heatData, {
-                    radius: 12, blur: 14, maxZoom: 14, minOpacity: 0.45,
-                    gradient: { 0.25: "#e2e8f0", 0.5: "#93c5fd", 0.75: cfg.color, 1.0: "#1e3a8a" }
-                }).addTo(map);
-            }
-        }
-
+            }).filter(Boolean);
+        addProvinceOutletMarkers(map, provincePoints);
         if (boundsMeta && boundsMeta.bounds) {
             const b = boundsMeta.bounds;
             map.fitBounds([[b[0][0], b[0][1]], [b[1][0], b[1][1]]], { padding: [18, 18] });
-        } else if (heatData.length) {
-            map.fitBounds(L.latLngBounds(heatData.map(d => [d[0], d[1]])).pad(0.08));
+        } else if (provincePoints.length) {
+            map.fitBounds(L.latLngBounds(provincePoints.map(p => [p.Latitude, p.Longitude])).pad(0.08));
         } else {
             map.setView([7.6, 80.5], 8);
         }
-
         provinceMaps.push(map);
     }
 
     function initProvinceChart(provs) {
         const sorted = [...provs].sort((a, b) => b.predicted_potential - a.predicted_potential);
         const names = sorted.map(p => p.province.replace(" Province", ""));
-
         Plotly.newPlot("province-chart", [
             {
                 y: names, x: sorted.map(p => p.hist_volume), name: "Historical",
@@ -527,30 +405,14 @@ document.addEventListener("DOMContentLoaded", function () {
             {
                 y: names, x: sorted.map(p => p.predicted_potential), name: "Predicted",
                 type: "bar", orientation: "h",
-                marker: {
-                    color: names.map(n => PROVINCE_CHART_COLORS[n] || PRIMARY),
-                    line: { width: 0 }
-                },
+                marker: { color: names.map(n => PROVINCE_CHART_COLORS[n] || PRIMARY), line: { width: 0 } },
                 hovertemplate: "<b>%{y}</b><br>Predicted: %{x:,.0f} L<extra></extra>"
             }
         ], {
-            ...plotLayout,
-            barmode: "group",
-            bargap: 0.22,
-            bargroupgap: 0.06,
-            margin: { l: 118, r: 48, t: 40, b: 48 },
-            height: 240,
-            legend: {
-                orientation: "h", y: 1.14, x: 0, xanchor: "left",
-                font: { size: 12, color: "#475569" }, bgcolor: "rgba(0,0,0,0)"
-            },
-            xaxis: {
-                ...plotLayout.xaxis,
-                tickformat: ".2s",
-                showgrid: true,
-                gridcolor: "#f1f5f9",
-                title: { text: "", font: { size: 12 } }
-            },
+            ...plotLayout, barmode: "group", bargap: 0.22, bargroupgap: 0.06,
+            margin: { l: 118, r: 48, t: 40, b: 48 }, height: 240,
+            legend: { orientation: "h", y: 1.14, x: 0, xanchor: "left", font: { size: 12, color: "#475569" }, bgcolor: "rgba(0,0,0,0)" },
+            xaxis: { ...plotLayout.xaxis, tickformat: ".2s", showgrid: true, gridcolor: "#f1f5f9" },
             yaxis: { ...plotLayout.yaxis, automargin: true, tickfont: { size: 13, color: "#334155" } }
         }, { displayModeBar: false, responsive: true });
     }
@@ -560,15 +422,10 @@ document.addEventListener("DOMContentLoaded", function () {
         const labels = data.map(d => String(d.bucket));
         const counts = data.map(d => Number(d.outlets) || 0);
         const pcts = counts.map(c => total ? ((c / total) * 100).toFixed(1) + "%" : "0%");
-
         Plotly.newPlot("potential-dist-chart", [{
-            x: labels,
-            y: counts,
-            type: "bar",
+            x: labels, y: counts, type: "bar",
             marker: { color: PRIMARY, line: { color: "#2563eb", width: 1 } },
-            text: pcts,
-            textposition: "outside",
-            textfont: { size: 11, color: "#64748b" },
+            text: pcts, textposition: "outside", textfont: { size: 11, color: "#64748b" },
             hovertemplate: "<b>%{x}</b><br>%{y:,} outlets (%{text})<extra></extra>"
         }], {
             ...plotLayout,
@@ -584,21 +441,15 @@ document.addEventListener("DOMContentLoaded", function () {
         const labels = sorted.map(d => d.Outlet_Type);
         const values = sorted.map(d => d.predicted_potential);
         const colors = sorted.map((_, i) => CB_PALETTE[i % CB_PALETTE.length]);
-
         Plotly.newPlot("segment-chart", [{
-            labels, values,
-            type: "pie", hole: 0.55,
-            textinfo: "percent",
-            textposition: "inside",
-            insidetextorientation: "horizontal",
+            labels, values, type: "pie", hole: 0.55,
+            textinfo: "percent", textposition: "inside", insidetextorientation: "horizontal",
             marker: { colors, line: { color: "#fff", width: 2 } },
             hovertemplate: "<b>%{label}</b><br>%{value:,.0f} L (%{percent})<extra></extra>",
             sort: false
         }], {
-            ...plotLayout,
-            showlegend: false,
-            margin: { l: 8, r: 8, t: 8, b: 8 },
-            height: 240
+            ...plotLayout, showlegend: false,
+            margin: { l: 8, r: 8, t: 8, b: 8 }, height: 240
         }, { displayModeBar: false, responsive: true });
 
         const legendEl = document.getElementById("segment-legend");
@@ -611,81 +462,9 @@ document.addEventListener("DOMContentLoaded", function () {
         }
     }
 
-    function initShapChart(data) {
-        if (!data.length) return;
-        const top = data.slice(0, 10);
-        const features = top.map(d => d.feature).reverse();
-        const values = top.map(d => d.mean_abs_shap).reverse();
-        const maxVal = Math.max(...values, 0.001);
-        const barColors = values.map(v => {
-            const t = v / maxVal;
-            const r = Math.round(59 + (37 - 59) * t);
-            const g = Math.round(130 + (99 - 130) * t);
-            const b = Math.round(246 + (235 - 246) * t);
-            return "rgb(" + r + "," + g + "," + b + ")";
-        });
-
-        Plotly.newPlot("shap-chart", [{
-            y: features, x: values,
-            type: "bar", orientation: "h",
-            marker: { color: barColors, line: { width: 0 } },
-            text: values.map(v => v.toFixed(3)),
-            textposition: "outside",
-            textfont: { size: 12, color: "#334155", family: "Inter, sans-serif" },
-            hovertemplate: "<b>%{y}</b><br>Importance: %{x:.4f}<extra></extra>"
-        }], {
-            ...plotLayout,
-            margin: { l: 200, r: 72, t: 16, b: 40 },
-            height: 380,
-            xaxis: {
-                ...plotLayout.xaxis,
-                title: { text: "Mean |SHAP|", font: { size: 13, color: "#64748b" } },
-                gridcolor: "#f1f5f9",
-                zeroline: false
-            },
-            yaxis: {
-                ...plotLayout.yaxis,
-                automargin: true,
-                tickfont: { size: 13, color: "#1e293b" }
-            }
-        }, { displayModeBar: false, responsive: true });
-    }
-
-    function initCensoringChart(data, lowPct) {
-        const bandColors = {
-            "Low (<0.15)": "#e8f5e9",
-            "Moderate (0.15–0.30)": "#bbdefb",
-            "Elevated (0.30–0.50)": "#ffcc80",
-            "Severe (≥0.50)": "#ef5350"
-        };
-        const labels = data.map(d => d.band);
-        const values = data.map(d => d.outlets);
-        const colors = labels.map(l => bandColors[l] || "#cbd5e1");
-
-        Plotly.newPlot("censoring-chart", [{
-            labels, values,
-            type: "pie", hole: 0.62,
-            textinfo: "none",
-            marker: { colors, line: { color: "#fff", width: 2 } },
-            hovertemplate: "<b>%{label}</b><br>%{value:,} outlets (%{percent})<extra></extra>"
-        }], {
-            ...plotLayout,
-            showlegend: true,
-            legend: { orientation: "h", y: -0.08, font: { size: 11 }, traceorder: "normal" },
-            margin: { l: 8, r: 8, t: 8, b: 40 },
-            height: 280
-        }, { displayModeBar: false, responsive: true });
-
-        const centerEl = document.getElementById("censoring-center-label");
-        if (centerEl) {
-            centerEl.innerHTML = '<div class="censoring-center-pct">' + lowPct + '%</div>' +
-                '<div class="censoring-center-sub">Low Risk</div>';
-        }
-    }
-
     window.addEventListener("resize", () => {
         invalidateAllMaps();
-        ["province-chart", "potential-dist-chart", "segment-chart", "shap-chart", "censoring-chart"].forEach(id => {
+        ["province-chart", "potential-dist-chart", "segment-chart"].forEach(id => {
             const el = document.getElementById(id);
             if (el) Plotly.Plots.resize(el);
         });

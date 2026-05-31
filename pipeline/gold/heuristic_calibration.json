@@ -4,43 +4,43 @@
   "folds": [
     {
       "fold": 1,
-      "CENSORING_UPLIFT": 0.7222582218852635,
-      "CATCHMENT_UPLIFT": 0.6194751849932225,
-      "train_loss": 0.9590960655127349,
-      "val_loss": 1.6957185880043901,
+      "CENSORING_UPLIFT": 0.7200643378829958,
+      "CATCHMENT_UPLIFT": 0.6302998532772048,
+      "train_loss": 0.9590958398639249,
+      "val_loss": 1.6956649659655345,
       "train_rows": 49967,
       "val_rows": 24987
     },
     {
       "fold": 2,
-      "CENSORING_UPLIFT": 1.1218220913555477,
-      "CATCHMENT_UPLIFT": 0.9428749463837598,
-      "train_loss": 1.2035268416545994,
-      "val_loss": 1.127664794566457,
+      "CENSORING_UPLIFT": 1.103386299148202,
+      "CATCHMENT_UPLIFT": 0.9629597867804767,
+      "train_loss": 1.2035266880718303,
+      "val_loss": 1.127629899084492,
       "train_rows": 74954,
       "val_rows": 25125
     },
     {
       "fold": 3,
-      "CENSORING_UPLIFT": 1.0191223334503174,
-      "CATCHMENT_UPLIFT": 1.0110233238601687,
-      "train_loss": 1.1843873100999394,
-      "val_loss": 1.2074201285793345,
+      "CENSORING_UPLIFT": 1.0184981702649964,
+      "CATCHMENT_UPLIFT": 1.011524057018105,
+      "train_loss": 1.1843872913678082,
+      "val_loss": 1.2074216285464603,
       "train_rows": 100079,
       "val_rows": 25074
     },
     {
       "fold": 4,
-      "CENSORING_UPLIFT": 1.0483541442489623,
-      "CATCHMENT_UPLIFT": 1.040472909355164,
-      "train_loss": 1.1890181728808569,
-      "val_loss": 0.9432535066599568,
+      "CENSORING_UPLIFT": 1.0734812339283524,
+      "CATCHMENT_UPLIFT": 1.0168082189083845,
+      "train_loss": 1.189018665904227,
+      "val_loss": 0.9434145568662086,
       "train_rows": 125153,
       "val_rows": 25078
     }
   ],
-  "CENSORING_UPLIFT": 1.03373823884964,
-  "CATCHMENT_UPLIFT": 0.9769491351219642,
-  "previous_CENSORING_UPLIFT": 1.0327,
-  "previous_CATCHMENT_UPLIFT": 0.9767
+  "CENSORING_UPLIFT": 1.0459897020966744,
+  "CATCHMENT_UPLIFT": 0.9872419218992908,
+  "previous_CENSORING_UPLIFT": 1.0337,
+  "previous_CATCHMENT_UPLIFT": 0.9769
 }

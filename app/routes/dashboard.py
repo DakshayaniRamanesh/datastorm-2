@@ -6,6 +6,7 @@ Executive command-center dashboard: KPIs, spatial heatmap, analytics panels.
 
 import json
 from pathlib import Path
+from typing import Any, Dict
 
 from flask import Blueprint, render_template, jsonify
 
@@ -43,6 +44,53 @@ def api_map_points():
     return jsonify(points)
 
 
+PROVINCE_FILTERS = {
+    "western": {
+        "prefix": "DIST_W",
+        "bounds": {"lat_min": 6.6, "lat_max": 7.4, "lon_min": 79.7, "lon_max": 80.2},
+    },
+    "central": {
+        "prefix": "DIST_C",
+        "bounds": {"lat_min": 6.4, "lat_max": 8.6, "lon_min": 80.0, "lon_max": 81.5},
+    },
+    "northwestern": {
+        "prefix": "DIST_NW",
+        "bounds": {"lat_min": 7.1, "lat_max": 8.6, "lon_min": 79.4, "lon_max": 80.7},
+    },
+    "southern": {
+        "prefix": "DIST_S",
+        "bounds": {"lat_min": 5.7, "lat_max": 7.2, "lon_min": 79.4, "lon_max": 81.0},
+    },
+}
+
+
+def _filter_province_outlets(points, province_key):
+    config = PROVINCE_FILTERS.get(province_key)
+    if not config:
+        return []
+
+    filtered = []
+    for p in points:
+        dist = (p.get("primary_dist") or "").upper()
+        if not dist.startswith(config["prefix"]):
+            continue
+
+        try:
+            lat = float(p.get("Latitude") or 0)
+            lon = float(p.get("Longitude") or 0)
+        except (TypeError, ValueError):
+            continue
+
+        bounds = config["bounds"]
+        if lat < bounds["lat_min"] or lat > bounds["lat_max"]:
+            continue
+        if lon < bounds["lon_min"] or lon > bounds["lon_max"]:
+            continue
+
+        filtered.append(p)
+    return filtered
+
+
 @dashboard_bp.route("/api/province-map-bounds")
 def api_province_map_bounds():
     """Per-province bounding boxes derived from outlet coordinates."""
@@ -51,33 +99,28 @@ def api_province_map_bounds():
 
 @dashboard_bp.route("/api/province-boundaries")
 def api_province_boundaries():
-    """GeoJSON for Western, Central, North Western, and Southern provinces."""
-    path = STATIC_DATA / "lk_provinces_4.geojson"
-    if not path.exists():
-        return jsonify({"type": "FeatureCollection", "features": []})
-    return jsonify(json.loads(path.read_text(encoding="utf-8")))
+    """GeoJSON boundaries for Western, Central, North Western, and Southern provinces."""
+    files = {
+        "DIST_W": "western.geojson",
+        "DIST_C": "central.geojson",
+        "DIST_NW": "Northwestern.geojson",
+        "DIST_S": "southern.geojson",
+    }
+    payload = {}
+    for prefix, filename in files.items():
+        path = STATIC_DATA / filename
+        if path.exists():
+            payload[prefix] = json.loads(path.read_text(encoding="utf-8"))
+        else:
+            payload[prefix] = {"type": "FeatureCollection", "features": []}
+    return jsonify(payload)
 
 
-@dashboard_bp.route("/api/western-outlets")
-def api_western_outlets():
-    """Outlet points for Western Province only with strict bounds validation."""
-    western_bounds = {"lat_min": 6.6, "lat_max": 7.4, "lon_min": 79.7, "lon_max": 80.2}
-    points = spatial.get_all_outlet_map_points(four_provinces_only=False)
-    
-    western = []
-    for p in points:
-        dist = (p.get("primary_dist") or "").upper()
-        if not dist.startswith("DIST_W"):
-            continue
-        
-        lat = float(p.get("Latitude") or 0)
-        lon = float(p.get("Longitude") or 0)
-        
-        if lat < western_bounds["lat_min"] or lat > western_bounds["lat_max"]:
-            continue
-        if lon < western_bounds["lon_min"] or lon > western_bounds["lon_max"]:
-            continue
-        
-        western.append(p)
-    
-    return jsonify(western)
+@dashboard_bp.route("/api/province-outlets")
+def api_province_outlets():
+    """Outlet points for all provinces using coordinates from input/outlet_coordinates.csv."""
+    points = spatial.get_all_outlet_map_points_from_csv()
+    output: Dict[str, Any] = {}
+    for province_key, cfg in PROVINCE_FILTERS.items():
+        output[cfg["prefix"]] = _filter_province_outlets(points, province_key)
+    return jsonify(output)

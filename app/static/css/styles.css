@@ -1084,8 +1084,9 @@ body {
 .dash-card {
     background: #ffffff;
     border: 1px solid var(--border-glass);
-    border-radius: 10px;
-    box-shadow: 0 2px 8px rgba(15, 23, 42, 0.06);
+    border-radius: 12px;
+    box-shadow: 0 6px 18px rgba(15, 23, 42, 0.06);
+    transition: box-shadow 280ms cubic-bezier(.2,.9,.25,1), transform 220ms cubic-bezier(.2,.9,.25,1);
     display: flex;
     flex-direction: column;
     height: 100%;
@@ -1197,6 +1198,72 @@ body {
     font-size: 11px;
     opacity: 0.7;
 }
+
+/* Modern KPI card visuals */
+.kpi-card-v2 {
+    background: linear-gradient(135deg, rgba(59,130,246,0.06) 0%, rgba(255,255,255,0) 100%);
+    border-radius: 12px;
+    box-shadow: 0 6px 14px rgba(15,23,42,0.04);
+    transition: transform 200ms cubic-bezier(.22,.9,.32,1), box-shadow 200ms ease;
+}
+.kpi-card-v2:hover {
+    transform: translateY(-4px);
+    box-shadow: 0 12px 30px rgba(15,23,42,0.10);
+}
+.kpi-card-v2--alert {
+    background: linear-gradient(135deg, rgba(220,38,38,0.06) 0%, rgba(255,255,255,0) 100%);
+}
+
+/* Province Opportunity cards */
+.province-opp-cards {
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(220px, 1fr));
+    gap: 12px;
+    margin-top: 12px;
+}
+.province-opp-card {
+    --accent: var(--prov-accent, #64748b);
+    background: linear-gradient(135deg, rgba(255,255,255,0.6), rgba(255,255,255,0.4));
+    border-radius: 12px;
+    padding: 12px 14px;
+    box-shadow: 0 6px 18px rgba(15,23,42,0.04);
+    position: relative;
+    overflow: hidden;
+    transition: transform 180ms cubic-bezier(.2,.9,.25,1), box-shadow 180ms ease;
+}
+.province-opp-card::before {
+    content: '';
+    position: absolute;
+    inset: 0;
+    background: radial-gradient(circle at 10% 10%, rgba(255,255,255,0.12), transparent 28%),
+                linear-gradient(180deg, rgba(0,0,0,0.02), transparent 40%);
+    pointer-events: none;
+}
+.province-opp-card:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 14px 40px rgba(15,23,42,0.10);
+}
+.province-opp-card-head { display:flex; align-items:center; gap:10px; margin-bottom:10px; }
+.province-opp-dot { width:12px; height:12px; border-radius:50%; background: var(--accent); box-shadow: 0 0 0 4px rgba(0,0,0,0.02) inset; flex-shrink:0; }
+.province-opp-name { font-weight:700; color: #0f172a; }
+.province-opp-uplift { margin-left:auto; font-weight:700; color:var(--accent); }
+.province-opp-metrics { display:flex; gap:8px; flex-wrap:wrap; }
+.province-opp-metric { min-width: 90px; }
+.province-opp-metric-val { display:block; font-weight:700; font-size:15px; color:#0f172a; }
+.province-opp-metric-lbl { font-size:12px; color:var(--text-muted); }
+
+/* Compact legend box for Province Opportunity header */
+.province-legend-box {
+    display:flex; align-items:center; gap:10px; background:#fff; padding:8px 10px; border-radius:10px; box-shadow:0 6px 18px rgba(12,18,36,0.04); border:1px solid var(--border-glass);
+}
+.province-legend-item { display:flex; align-items:center; gap:8px; font-size:13px; color:var(--text-muted); }
+.province-legend-swatch { width:12px; height:12px; border-radius:4px; box-shadow: 0 1px 0 rgba(0,0,0,0.04); }
+
+/* Page title gradient */
+.page-title { background: linear-gradient(90deg, #0f172a 0%, #1e40af 50%, #ea580c 100%); -webkit-background-clip: text; -webkit-text-fill-color: transparent; }
+
+/* Hide Feature Importance + Censoring section when removed from DOM fallback */
+.dash-card--feature-full, .censoring-chart-wrap { display: none !important; }
 
 .kpi-card-v2--alert .kpi-card-v2-value {
     color: var(--color-red);
