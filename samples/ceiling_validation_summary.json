@@ -1,17 +1,17 @@
 [
   {
     "Model":"Heuristic_Latent_TwoRegime",
-    "rank_corr_ceiling_spearman":0.8700748093,
-    "uplift_censoring_spearman":0.1403512727,
-    "pct_pred_exceeds_observed":59.8549160795,
-    "observed_mae":111.7041492835
+    "rank_corr_ceiling_spearman":0.8700653516,
+    "uplift_censoring_spearman":0.1406861688,
+    "pct_pred_exceeds_observed":59.8587190947,
+    "observed_mae":111.8670105631
   },
   {
     "Model":"Heuristic_Quantile_Blend",
-    "rank_corr_ceiling_spearman":0.8715860666,
-    "uplift_censoring_spearman":0.1786563752,
-    "pct_pred_exceeds_observed":61.146609386,
-    "observed_mae":111.7464848703
+    "rank_corr_ceiling_spearman":0.8715740322,
+    "uplift_censoring_spearman":0.1789104055,
+    "pct_pred_exceeds_observed":61.1485132515,
+    "observed_mae":111.8938693403
   },
   {
     "Model":"LightGBM Quantile (observed-sales benchmark)",

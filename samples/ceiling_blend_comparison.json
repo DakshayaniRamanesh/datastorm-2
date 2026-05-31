@@ -2,18 +2,18 @@
   "use_ceiling_quantile_blend": true,
   "heuristic_only": {
     "Model": "Heuristic_Latent_TwoRegime",
-    "rank_corr_ceiling_spearman": 0.8700748093265395,
-    "uplift_censoring_spearman": 0.1403512727358808,
-    "pct_pred_exceeds_observed": 59.854916079502345,
-    "observed_mae": 111.70414928349807
+    "rank_corr_ceiling_spearman": 0.8700653516440872,
+    "uplift_censoring_spearman": 0.14068616878234394,
+    "pct_pred_exceeds_observed": 59.85871909466249,
+    "observed_mae": 111.86701056310625
   },
   "blended_production": {
     "Model": "Heuristic_Quantile_Blend",
-    "rank_corr_ceiling_spearman": 0.8715860665892537,
-    "uplift_censoring_spearman": 0.17865637515570365,
-    "pct_pred_exceeds_observed": 61.14660938602154,
-    "observed_mae": 111.74648487028513
+    "rank_corr_ceiling_spearman": 0.8715740321747546,
+    "uplift_censoring_spearman": 0.17891040548869638,
+    "pct_pred_exceeds_observed": 61.14851325148087,
+    "observed_mae": 111.89386934030108
   },
-  "delta_rank_corr_ceiling": 0.0015112572627142828,
-  "delta_uplift_censoring": 0.03830510241982285
+  "delta_rank_corr_ceiling": 0.001508680530667439,
+  "delta_uplift_censoring": 0.038224236706352444
 }

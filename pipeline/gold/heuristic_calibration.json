@@ -4,43 +4,43 @@
   "folds": [
     {
       "fold": 1,
-      "CENSORING_UPLIFT": 0.7201555230379095,
-      "CATCHMENT_UPLIFT": 0.6340879384160036,
-      "train_loss": 0.9590957257855214,
-      "val_loss": 1.695635867183516,
+      "CENSORING_UPLIFT": 0.7200791887692355,
+      "CATCHMENT_UPLIFT": 0.6245463161130234,
+      "train_loss": 0.95909566649196,
+      "val_loss": 1.6957091542491642,
       "train_rows": 49967,
       "val_rows": 24987
     },
     {
       "fold": 2,
-      "CENSORING_UPLIFT": 1.118860395532474,
-      "CATCHMENT_UPLIFT": 0.9411774635575715,
-      "train_loss": 1.2035264286155527,
-      "val_loss": 1.1276574077070318,
+      "CENSORING_UPLIFT": 1.118958925226368,
+      "CATCHMENT_UPLIFT": 0.9434129185560347,
+      "train_loss": 1.2035264334910813,
+      "val_loss": 1.1276584001627852,
       "train_rows": 74954,
       "val_rows": 25125
     },
     {
       "fold": 3,
-      "CENSORING_UPLIFT": 1.0185114025473592,
-      "CATCHMENT_UPLIFT": 1.0091630088686943,
-      "train_loss": 1.184387368035207,
-      "val_loss": 1.207422365750583,
+      "CENSORING_UPLIFT": 1.018716557500511,
+      "CATCHMENT_UPLIFT": 1.0110451043206452,
+      "train_loss": 1.1843872610146686,
+      "val_loss": 1.207421781208709,
       "train_rows": 100079,
       "val_rows": 25074
     },
     {
       "fold": 4,
-      "CENSORING_UPLIFT": 1.0468872276544567,
-      "CATCHMENT_UPLIFT": 1.036990297794342,
-      "train_loss": 1.1890180960415886,
-      "val_loss": 0.9432278015985229,
+      "CENSORING_UPLIFT": 1.0635808594894407,
+      "CATCHMENT_UPLIFT": 1.0323651776123042,
+      "train_loss": 1.1890182010961168,
+      "val_loss": 0.9433709505447145,
       "train_rows": 125153,
       "val_rows": 25078
     }
   ],
-  "CENSORING_UPLIFT": 1.032699315100908,
-  "CATCHMENT_UPLIFT": 0.9751702362131329,
-  "previous_CENSORING_UPLIFT": 1.033,
-  "previous_CATCHMENT_UPLIFT": 0.978
+  "CENSORING_UPLIFT": 1.0411487084949758,
+  "CATCHMENT_UPLIFT": 0.97722901143834,
+  "previous_CENSORING_UPLIFT": 1.0327,
+  "previous_CATCHMENT_UPLIFT": 0.9752
 }
