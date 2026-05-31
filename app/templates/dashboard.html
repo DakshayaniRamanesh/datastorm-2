@@ -298,16 +298,19 @@ document.addEventListener("DOMContentLoaded", function () {
     function loadProvinceMaps() {
         Promise.all([
             fetch("{{ url_for('dashboard.api_map_points') }}").then(r => r.json()),
-            fetch("{{ url_for('dashboard.api_province_map_bounds') }}").then(r => r.json())
+            fetch("{{ url_for('dashboard.api_province_map_bounds') }}").then(r => r.json()),
+            fetch("{{ url_for('static', filename='data/western.geojson') }}").then(r => r.json()),
+            fetch("{{ url_for('dashboard.api_western_outlets') }}").then(r => r.json())
         ])
-        .then(([points, bounds]) => {
-            initProvinceMaps(points, bounds || {});
+        .then(([points, bounds, westernBoundary, westernOutlets]) => {
+            initProvinceMaps(points, bounds || {}, westernOutlets || []);
+            initWesternBoundary(westernBoundary);
             hideMapLoading();
             scheduleMapResize();
         })
         .catch(err => {
             console.error("Map load failed:", err);
-            initProvinceMaps([], {});
+            initProvinceMaps([], {}, []);
             hideMapLoading();
             const el = document.getElementById("province-map-loading");
             if (el) { el.textContent = "Map data unavailable."; el.classList.remove("is-hidden"); }
@@ -322,18 +325,123 @@ document.addEventListener("DOMContentLoaded", function () {
         provinceMaps.forEach(m => { try { m.invalidateSize(); } catch (_) {} });
     }
 
+    function getMapById(mapId) {
+        return provinceMaps.find(m => m._provinceId === mapId);
+    }
+
+    function initWesternBoundary(boundaryGeoJSON) {
+        if (!boundaryGeoJSON || !boundaryGeoJSON.features || !boundaryGeoJSON.features.length) return;
+        const map = getMapById("map-western");
+        if (!map || typeof L.geoJSON !== "function") return;
+
+        L.geoJSON(boundaryGeoJSON, {
+            style: {
+                color: "#1d4ed8",
+                weight: 2,
+                opacity: 0.85,
+                fillOpacity: 0.08,
+                fillColor: "#bfdbfe"
+            },
+            interactive: false
+        }).addTo(map);
+    }
+
+    function getPotentialColor(intensity) {
+        const t = Math.max(0, Math.min(1, intensity));
+        let r, g, b;
+        if (t < 0.5) {
+            const s = t * 2;
+            r = Math.round(220 + (255 - 220) * s);
+            g = Math.round(38 + (165 - 38) * s);
+            b = 38;
+        } else {
+            const s = (t - 0.5) * 2;
+            r = Math.round(255 - (255 - 34) * s);
+            g = Math.round(165 + (134 - 165) * s);
+            b = 38;
+        }
+        return `rgb(${r}, ${g}, ${b})`;
+    }
+
+    function getPotentialRadius(intensity) {
+        return 4 + Math.round(6 * Math.max(0, Math.min(1, intensity)));
+    }
+
+    function addWesternOutletMarkers(map, points) {
+        if (!points || !points.length) return;
+        
+        const markerGroup = L.featureGroup();
+        
+        points.forEach(p => {
+            const lat = parseFloat(p.Latitude);
+            const lon = parseFloat(p.Longitude);
+            if (!lat || !lon || isNaN(lat) || isNaN(lon)) return;
+            
+            const potential = Number(p.Maximum_Monthly_Liters || 0);
+            const intensity = Math.min(1, potential / 1200);
+            
+            const marker = L.circleMarker([lat, lon], {
+                radius: getPotentialRadius(intensity),
+                weight: 1.5,
+                opacity: 0.9,
+                fillOpacity: 0.85,
+                fillColor: getPotentialColor(intensity),
+                color: "#1f2937"
+            }).bindPopup(
+                `<strong>${p.Outlet_ID || 'Outlet'}</strong><br>` +
+                `Potential: ${potential.toLocaleString()} L<br>` +
+                `<small>Lat: ${lat.toFixed(4)}, Lon: ${lon.toFixed(4)}</small>`
+            );
+            
+            markerGroup.addLayer(marker);
+        });
+        
+        if (typeof L.markerClusterGroup === 'function') {
+            const clusteredGroup = L.markerClusterGroup({
+                disableClusteringAtZoom: 15,
+                maxClusterRadius: 50
+            });
+            points.forEach(p => {
+                const lat = parseFloat(p.Latitude);
+                const lon = parseFloat(p.Longitude);
+                if (!lat || !lon || isNaN(lat) || isNaN(lon)) return;
+                const potential = Number(p.Maximum_Monthly_Liters || 0);
+                const intensity = Math.min(1, potential / 1200);
+                const marker = L.circleMarker([lat, lon], {
+                    radius: getPotentialRadius(intensity),
+                    weight: 1.5,
+                    opacity: 0.9,
+                    fillOpacity: 0.85,
+                    fillColor: getPotentialColor(intensity),
+                    color: "#1f2937"
+                }).bindPopup(`<strong>${p.Outlet_ID || 'Outlet'}</strong><br>Potential: ${potential.toLocaleString()} L`);
+                clusteredGroup.addLayer(marker);
+            });
+            map.addLayer(clusteredGroup);
+        } else {
+            markerGroup.addTo(map);
+        }
+    }
+
     function getProvincePrefix(dist) {
         return (dist || "").split("_").slice(0, 2).join("_");
     }
 
-    function initProvinceMaps(mapPoints, boundsByPrefix) {
+    function initProvinceMaps(mapPoints, boundsByPrefix, westernOutlets) {
         const legendEl = document.getElementById("map-legend");
         if (legendEl) legendEl.innerHTML = "";
 
         PROVINCE_CONFIG.forEach(cfg => {
             try {
-                const provPoints = (mapPoints || []).filter(p => getProvincePrefix(p.primary_dist) === cfg.prefix);
-                const bounds = boundsByPrefix[cfg.prefix];
+                let provPoints = [];
+                let bounds = boundsByPrefix[cfg.prefix];
+                
+                if (cfg.short === "Western") {
+                    provPoints = westernOutlets || [];
+                } else {
+                    provPoints = (mapPoints || []).filter(p => getProvincePrefix(p.primary_dist) === cfg.prefix);
+                }
+                
                 initSingleProvinceMap(cfg, provPoints, bounds);
                 if (legendEl) {
                     const s = document.createElement("span");
@@ -353,31 +461,44 @@ document.addEventListener("DOMContentLoaded", function () {
         if (!el || el._leaflet_map) return;
 
         const map = L.map(cfg.mapId, {
-            zoomControl: false,
+            zoomControl: true,
             attributionControl: false,
             preferCanvas: true,
             dragging: true,
-            scrollWheelZoom: false,
-            doubleClickZoom: false,
+            scrollWheelZoom: true,
+            doubleClickZoom: true,
             touchZoom: true
         });
         el._leaflet_map = map;
+        map._provinceId = cfg.mapId;
 
         L.tileLayer("https://{s}.basemaps.cartocdn.com/light_all/{z}/{x}/{y}{r}.png", {
             subdomains: "abcd", maxZoom: 18
         }).addTo(map);
 
-        const heatData = points.map(p => {
-            const lat = parseFloat(p.Latitude), lon = parseFloat(p.Longitude);
-            if (!lat || !lon || lat < 5 || lat > 11 || lon < 79 || lon > 83) return null;
-            return [lat, lon, Math.min(1, (p.Maximum_Monthly_Liters || 0) / 1800)];
-        }).filter(Boolean);
+        const validPoints = points
+            .map(p => {
+                const lat = parseFloat(p.Latitude);
+                const lon = parseFloat(p.Longitude);
+                if (!lat || !lon || lat < 5 || lat > 11 || lon < 79 || lon > 83) return null;
+                return { ...p, Latitude: lat, Longitude: lon, potential: Number(p.Maximum_Monthly_Liters || 0) };
+            })
+            .filter(Boolean);
 
-        if (heatData.length && typeof L.heatLayer === "function") {
-            L.heatLayer(heatData, {
-                radius: 12, blur: 14, maxZoom: 14, minOpacity: 0.45,
-                gradient: { 0.25: "#e2e8f0", 0.5: "#93c5fd", 0.75: cfg.color, 1.0: "#1e3a8a" }
-            }).addTo(map);
+        if (cfg.short === "Western") {
+            const westernPoints = validPoints.filter(p => {
+                const dist = p.primary_dist || "";
+                return dist.startsWith("DIST_W");
+            });
+            addWesternOutletMarkers(map, westernPoints);
+        } else {
+            const heatData = validPoints.map(p => [p.Latitude, p.Longitude, Math.min(1, p.potential / 1800)]);
+            if (heatData.length && typeof L.heatLayer === "function") {
+                L.heatLayer(heatData, {
+                    radius: 12, blur: 14, maxZoom: 14, minOpacity: 0.45,
+                    gradient: { 0.25: "#e2e8f0", 0.5: "#93c5fd", 0.75: cfg.color, 1.0: "#1e3a8a" }
+                }).addTo(map);
+            }
         }
 
         if (boundsMeta && boundsMeta.bounds) {

@@ -46,7 +46,7 @@ def compute_heuristic_attributions(df: pd.DataFrame) -> dict:
     latent_only_terms = [
         1.0 + w * (d["censoring_score"].values * CENSORING_UPLIFT),
         np.where(w > 1e-9, 1.0 + w * (d["peer_efficiency_gap"].values - 1.0), 1.0),
-        1.0 + w * (d["combined_catchment_score"].values * CATCHMENT_UPLIFT),
+        1.0 + w * (d["effective_catchment_score"].values * CATCHMENT_UPLIFT),
     ]
 
     running = d["jan_base"].values.astype(float)

@@ -110,8 +110,9 @@
                     <div class="col-sm-4">
                         <div class="text-muted small">Combined Catchment Score</div>
                         <div class="font-weight-bold">
-                            {% if outlet.combined_catchment_score is defined and outlet.combined_catchment_score is not none %}
-                            {{ "%.3f" | format(outlet.combined_catchment_score) }}
+                            {% set catch = outlet.effective_catchment_score if outlet.effective_catchment_score is defined and outlet.effective_catchment_score is not none else outlet.combined_catchment_score %}
+                            {% if catch is defined and catch is not none %}
+                            {{ "%.3f" | format(catch) }}
                             {% else %}
                             0.000
                             {% endif %}

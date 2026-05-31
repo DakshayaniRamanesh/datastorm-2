@@ -26,6 +26,7 @@ ROOT = Path(__file__).parent.parent
 sys.path.insert(0, str(ROOT / "pipeline"))
 
 from feature_builder import build_outlet_features
+from poi_catchment import enrich_catchment_features
 from latent_heuristic import (
     CATCHMENT_UPLIFT,
     CENSORING_UPLIFT,
@@ -143,7 +144,11 @@ def enrich_panel(panel: pd.DataFrame, season: pd.DataFrame) -> pd.DataFrame:
             df["jan_hist_mean"].notna() & (df["jan_hist_mean"] > 0),
             df["hist_median_vol"],
         )
-    return df
+    if "competition_dampener" not in df.columns:
+        df["competition_dampener"] = 1.0
+    else:
+        df["competition_dampener"] = df["competition_dampener"].fillna(1.0).clip(0.5, 1.0)
+    return enrich_catchment_features(df)
 
 
 def ceiling_target(df: pd.DataFrame) -> np.ndarray:

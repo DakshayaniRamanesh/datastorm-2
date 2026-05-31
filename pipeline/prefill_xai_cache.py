@@ -29,6 +29,8 @@ def _ensure_xai_fields(row: dict) -> dict:
     """Normalize gold row keys expected by XAIService."""
     defaults = {
         "combined_catchment_score": 0.0,
+        "poi_catchment_score": 0.0,
+        "effective_catchment_score": 0.0,
         "competitor_density_gaussian": 0.0,
         "Cooler_Count": 0,
         "yoy_growth": 0.0,

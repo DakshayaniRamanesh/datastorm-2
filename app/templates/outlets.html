@@ -118,8 +118,9 @@
                             </td>
                             <!-- Catchment score -->
                             <td>
-                                {% if o.combined_catchment_score is defined and o.combined_catchment_score is not none %}
-                                {{ "%.2f" | format(o.combined_catchment_score) }}
+                                {% set catch = o.effective_catchment_score if o.effective_catchment_score is defined and o.effective_catchment_score is not none else o.combined_catchment_score %}
+                                {% if catch is defined and catch is not none %}
+                                {{ "%.2f" | format(catch) }}
                                 {% else %}
                                 0.00
                                 {% endif %}

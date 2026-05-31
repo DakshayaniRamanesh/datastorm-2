@@ -30,6 +30,7 @@ from latent_heuristic import (
     ensure_heuristic_inputs,
 )
 from heuristic_attribution import compute_heuristic_attributions
+from poi_catchment import enrich_catchment_features
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -424,6 +425,16 @@ def main():
         gold_feats["market_accessibility"] = gold_feats[bus_col]
     else:
         gold_feats["market_accessibility"] = 0.0
+
+    # Block 1: legacy weighted poi_* score + blend with Gaussian/gravity catchment
+    gold_feats = enrich_catchment_features(gold_feats)
+    logger.info(
+        "Catchment scores — poi median=%.4f p95=%.4f | combined median=%.4f | effective median=%.4f",
+        gold_feats["poi_catchment_score"].median(),
+        gold_feats["poi_catchment_score"].quantile(0.95),
+        gold_feats["combined_catchment_score"].median(),
+        gold_feats["effective_catchment_score"].median(),
+    )
         
     # Set prediction base representation
     gold_feats["jan_base"] = gold_feats["jan_hist_mean"].where(
@@ -501,6 +512,7 @@ def main():
         "capacity_proximity_ratio", "purchase_pace_variance", "dist_rank_mean",
         "target_season_factor", "target_month", "Cooler_Count",
         # Upgraded Features
+        "poi_catchment_score", "effective_catchment_score",
         "combined_catchment_score", "competitor_density_gaussian", "competitor_density_gravity",
         "market_saturation_index", "competition_dampener", "gravity_catchment_score",
         "market_accessibility", "population_proxy", "peer_efficiency_gap",

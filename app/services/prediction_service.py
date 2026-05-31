@@ -160,7 +160,8 @@ class PredictionService:
         allowed_sort_cols = {
             "Outlet_ID", "Outlet_Type", "Outlet_Size", "Cooler_Count",
             "hist_median_vol", "Maximum_Monthly_Liters", "censoring_score",
-            "combined_catchment_score", "market_saturation_index"
+            "combined_catchment_score", "effective_catchment_score", "poi_catchment_score",
+            "market_saturation_index"
         }
         if sort_by not in allowed_sort_cols:
             sort_by = "Outlet_ID"

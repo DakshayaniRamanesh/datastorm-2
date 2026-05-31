@@ -56,3 +56,28 @@ def api_province_boundaries():
     if not path.exists():
         return jsonify({"type": "FeatureCollection", "features": []})
     return jsonify(json.loads(path.read_text(encoding="utf-8")))
+
+
+@dashboard_bp.route("/api/western-outlets")
+def api_western_outlets():
+    """Outlet points for Western Province only with strict bounds validation."""
+    western_bounds = {"lat_min": 6.6, "lat_max": 7.4, "lon_min": 79.7, "lon_max": 80.2}
+    points = spatial.get_all_outlet_map_points(four_provinces_only=False)
+    
+    western = []
+    for p in points:
+        dist = (p.get("primary_dist") or "").upper()
+        if not dist.startswith("DIST_W"):
+            continue
+        
+        lat = float(p.get("Latitude") or 0)
+        lon = float(p.get("Longitude") or 0)
+        
+        if lat < western_bounds["lat_min"] or lat > western_bounds["lat_max"]:
+            continue
+        if lon < western_bounds["lon_min"] or lon > western_bounds["lon_max"]:
+            continue
+        
+        western.append(p)
+    
+    return jsonify(western)

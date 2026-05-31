@@ -15,9 +15,11 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 
+from poi_catchment import enrich_catchment_features
+
 # Uplift weights — recalibrate via pipeline/calibrate_heuristic.py (walk-forward ceiling targets)
-CENSORING_UPLIFT = 1.2997
-CATCHMENT_UPLIFT = 1.9995
+CENSORING_UPLIFT = 1.0337
+CATCHMENT_UPLIFT = 0.9769
 
 # Two-regime blend: censoring_score in [0, BLEND_START] -> baseline; >= BLEND_FULL -> full latent
 REGIME_BLEND_START = 0.15
@@ -64,10 +66,9 @@ def ensure_heuristic_inputs(df: pd.DataFrame) -> pd.DataFrame:
         out["competition_dampener"] = out["competition_dampener"].fillna(1.0).clip(0.5, 1.0)
     if "peer_efficiency_gap" in out.columns:
         out["peer_efficiency_gap"] = out["peer_efficiency_gap"].fillna(1.0).clip(1.0, 3.0)
-    if "combined_catchment_score" in out.columns:
-        out["combined_catchment_score"] = out["combined_catchment_score"].fillna(0.0).clip(0.0, 1.0)
     if "censoring_score" in out.columns:
         out["censoring_score"] = out["censoring_score"].fillna(0.0).clip(0.0, 1.0)
+    out = enrich_catchment_features(out)
     return out
 
 
@@ -106,7 +107,7 @@ def compute_latent_core(
         * d["target_season_factor"].values
         * (1.0 + d["censoring_score"].values * alpha)
         * d["peer_efficiency_gap"].values
-        * (1.0 + d["combined_catchment_score"].values * gamma)
+        * (1.0 + d["effective_catchment_score"].values * gamma)
         * d["competition_dampener"].values
     )
 
