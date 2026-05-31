@@ -247,26 +247,30 @@ body {
 
 .badge-blue {
     background: #eff6ff;
-    color: #1d4ed8;
+    color: #1e40af;
     border-color: #bfdbfe;
+    font-weight: 600;
 }
 
 .badge-green {
     background: #f0fdf4;
-    color: #15803d;
+    color: #166534;
     border-color: #bbf7d0;
+    font-weight: 600;
 }
 
 .badge-red {
     background: #fef2f2;
-    color: #b91c1c;
+    color: #dc2626;
     border-color: #fecaca;
+    font-weight: 600;
 }
 
 .badge-gold {
     background: #fff7ed;
-    color: #c2410c;
+    color: #ea580c;
     border-color: #fed7aa;
+    font-weight: 600;
 }
 
 .form-glass,
