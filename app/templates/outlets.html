@@ -5,8 +5,8 @@
     <!-- Header -->
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
-            <h1 class="h2 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 700; color: #1e293b;">Outlet Explorer</h1>
-            <p class="text-muted mb-0" style="font-size: 14px;">Browse, filter, and audit outlets, demand potential, and local competitor indexes.</p>
+            <h1 class="page-title">Outlet Explorer</h1>
+            <p class="page-subtitle">Browse, filter, and audit outlets, demand potential, and local competitor indexes.</p>
         </div>
         <div>
             <span class="badge-glass badge-blue" style="font-size: 12px;"><i class="fa-solid fa-layer-group me-1"></i> Total Records: {{ "{:,}".format(total_count) }}</span>
@@ -16,18 +16,19 @@
     <!-- Filter Form Panel -->
     <div class="command-panel p-4 mb-4">
         <form method="GET" action="{{ url_for('outlets.view_outlets') }}" class="row g-3">
+            <input type="hidden" name="page" value="1">
             <!-- Search bar -->
             <div class="col-md-3">
-                <label class="form-label text-muted small font-weight-bold" style="font-size: 12px;">Search Outlet ID</label>
+                <label class="form-label profile-label font-weight-bold">Search Outlet ID</label>
                 <div class="input-group">
                     <span class="input-group-text bg-transparent border-end-0" style="border: 1px solid var(--border-glass);"><i class="fa-solid fa-magnifying-glass text-muted"></i></span>
-                    <input type="text" name="search" class="form-control form-glass border-start-0 ps-0" placeholder="Search..." value="{{ search_query }}">
+                    <input type="text" name="search" class="form-control form-glass border-start-0 ps-0" placeholder="e.g. OUT_00001 or 00001" value="{{ search_query }}" autocomplete="off">
                 </div>
             </div>
             
             <!-- Type filter -->
             <div class="col-md-2">
-                <label class="form-label text-muted small font-weight-bold" style="font-size: 12px;">Outlet Type</label>
+                <label class="form-label profile-label font-weight-bold">Outlet Type</label>
                 <select name="type" class="form-select form-glass">
                     <option value="">All Types</option>
                     {% for t in filter_options.types %}
@@ -38,7 +39,7 @@
             
             <!-- Size filter -->
             <div class="col-md-2">
-                <label class="form-label text-muted small font-weight-bold" style="font-size: 12px;">Outlet Size</label>
+                <label class="form-label profile-label font-weight-bold">Outlet Size</label>
                 <select name="size" class="form-select form-glass">
                     <option value="">All Sizes</option>
                     {% for s in filter_options.sizes %}
@@ -49,7 +50,7 @@
             
             <!-- Distributor filter -->
             <div class="col-md-3">
-                <label class="form-label text-muted small font-weight-bold" style="font-size: 12px;">Distributor Network</label>
+                <label class="form-label profile-label font-weight-bold">Distributor Network</label>
                 <select name="distributor" class="form-select form-glass">
                     <option value="">All Distributors</option>
                     {% for d in filter_options.distributors %}
@@ -91,21 +92,21 @@
                         <tr>
                             <!-- ID -->
                             <td>
-                                <a href="{{ url_for('outlets.view_outlet_detail', outlet_id=o.Outlet_ID) }}" class="font-weight-bold" style="text-decoration: none; color: #1d4ed8;">
-                                    <i class="fa-solid fa-circle-chevron-right me-1" style="color: #1d4ed8;"></i> {{ o.Outlet_ID }}
+                                <a href="{{ url_for('outlets.view_outlet_detail', outlet_id=o.Outlet_ID) }}" class="outlet-link">
+                                    <i class="fa-solid fa-circle-chevron-right me-1"></i> {{ o.Outlet_ID }}
                                 </a>
                             </td>
                             <!-- Type -->
                             <td><span class="badge-glass badge-blue" style="font-size: 11px;">{{ o.Outlet_Type }}</span></td>
                             <!-- Size -->
-                            <td style="font-weight: 500;">{{ o.Outlet_Size }}</td>
+                            <td><span class="profile-value" style="font-size: 13px;">{{ o.Outlet_Size }}</span></td>
                             <!-- Distributor -->
-                            <td><span style="color: #475569; font-size: 12px;">{{ o.primary_dist }}</span></td>
+                            <td><span style="color: var(--text-secondary); font-size: 12px;">{{ o.primary_dist }}</span></td>
                             <!-- Volume -->
-                            <td style="font-weight: 500;">{{ "{:,.1f}".format(o.hist_median_vol) }} L</td>
-                            <td style="font-weight: 600;">{{ "{:,.1f}".format(o.Maximum_Monthly_Liters) }} L</td>
+                            <td class="profile-value">{{ "{:,.1f}".format(o.hist_median_vol) }} L</td>
+                            <td class="profile-value">{{ "{:,.1f}".format(o.Maximum_Monthly_Liters) }} L</td>
                             <!-- Opportunity Gap -->
-                            <td><span style="color: #166534; font-weight: 600;">+{{ "{:,.1f}".format(o.Maximum_Monthly_Liters - o.hist_median_vol) }} L</span></td>
+                            <td><span class="metric-positive">+{{ "{:,.1f}".format(o.Maximum_Monthly_Liters - o.hist_median_vol) }} L</span></td>
                             <!-- Censoring score -->
                             <td>
                                 {% if o.censoring_score > 0.50 %}
@@ -117,7 +118,7 @@
                                 {% endif %}
                             </td>
                             <!-- Catchment score -->
-                            <td style="font-weight: 500;">
+                            <td class="profile-value">
                                 {% set catch = o.effective_catchment_score if o.effective_catchment_score is defined and o.effective_catchment_score is not none else o.combined_catchment_score %}
                                 {% if catch is defined and catch is not none %}
                                 {{ "%.2f" | format(catch) }}
@@ -129,20 +130,20 @@
                             <td>
                                 {% if o.market_saturation_index is defined and o.market_saturation_index is not none %}
                                     {% if o.market_saturation_index > 2.0 %}
-                                    <span style="color: #dc2626; font-weight: 600;"><i class="fa-solid fa-triangle-exclamation me-1"></i> Saturated</span>
+                                    <span style="color: var(--danger); font-weight: 600;"><i class="fa-solid fa-triangle-exclamation me-1"></i> Saturated</span>
                                     {% else %}
-                                    <span style="color: #475569;">{{ "%.2f" | format(o.market_saturation_index) }}</span>
+                                    <span style="color: var(--text-secondary);">{{ "%.2f" | format(o.market_saturation_index) }}</span>
                                     {% endif %}
                                 {% else %}
-                                <span style="color: #475569;">0.00</span>
+                                <span style="color: var(--text-muted);">0.00</span>
                                 {% endif %}
                             </td>
                             <!-- Budget allocations -->
                             <td>
                                 {% if o.Trade_Spend_LKR > 0 %}
-                                <span style="color: #166534; font-weight: 600;">LKR {{ "{:,.0f}".format(o.Trade_Spend_LKR) }}</span>
+                                <span class="metric-positive">LKR {{ "{:,.0f}".format(o.Trade_Spend_LKR) }}</span>
                                 {% else %}
-                                <span style="color: #94a3b8; font-size: 12px;">—</span>
+                                <span style="color: var(--text-muted); font-size: 12px;">—</span>
                                 {% endif %}
                             </td>
                         </tr>
@@ -171,7 +172,7 @@
             <ul class="pagination mb-0 gap-2">
                 <!-- Previous Button -->
                 <li class="page-item {% if page == 1 %}disabled{% endif %}">
-                    <a class="btn-glass text-white py-1 px-3" href="{{ url_for('outlets.view_outlets', page=page-1, search=search_query, type=selected_type, size=selected_size, distributor=selected_distributor) }}">
+                    <a class="btn-glass btn-blue py-1 px-3" href="{{ url_for('outlets.view_outlets', page=page-1, search=search_query, type=selected_type, size=selected_size, distributor=selected_distributor) }}">
                         <i class="fa-solid fa-chevron-left me-1"></i> Prev
                     </a>
                 </li>
@@ -183,7 +184,7 @@
                 
                 <!-- Next Button -->
                 <li class="page-item {% if page == total_pages %}disabled{% endif %}">
-                    <a class="btn-glass text-white py-1 px-3" href="{{ url_for('outlets.view_outlets', page=page+1, search=search_query, type=selected_type, size=selected_size, distributor=selected_distributor) }}">
+                    <a class="btn-glass btn-blue py-1 px-3" href="{{ url_for('outlets.view_outlets', page=page+1, search=search_query, type=selected_type, size=selected_size, distributor=selected_distributor) }}">
                         Next <i class="fa-solid fa-chevron-right ms-1"></i>
                     </a>
                 </li>

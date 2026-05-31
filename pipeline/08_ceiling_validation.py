@@ -10,12 +10,14 @@ Metrics per model:
   - Gap recovery (% pred > observed)
   - High-censoring subset (score > 0.4)
 
-Compares: Two-regime Heuristic vs LightGBM 90th-percentile benchmark.
+Compares: Two-regime Heuristic vs ceiling-target quantile vs observed-sales LightGBM benchmark.
 """
 
 from __future__ import annotations
 
+import json
 import logging
+import shutil
 import sys
 import warnings
 from pathlib import Path
@@ -28,12 +30,19 @@ from sklearn.model_selection import TimeSeriesSplit
 sys.path.insert(0, str(Path(__file__).parent))
 
 from ceiling_metrics import compute_ceiling_metrics
+from ceiling_quantile_model import (
+    CEILING_MODEL_NAME,
+    predict_ceiling_quantile_liters,
+    train_ceiling_quantile_model,
+)
 from feature_builder import build_outlet_features
 from latent_heuristic import (
+    BLENDED_MODEL_NAME,
+    HEURISTIC_ONLY_MODEL_NAME,
     PRIMARY_MODEL_NAME,
-    compute_heuristic_potential,
+    USE_CEILING_QUANTILE_BLEND,
     ensure_heuristic_inputs,
-    finalize_latent_predictions,
+    predict_heuristic_only,
     predict_latent_potential,
 )
 
@@ -152,16 +161,49 @@ def validate_gold_snapshot() -> pd.DataFrame:
 
     gold = pd.read_parquet(gold_path)
     gold = ensure_heuristic_inputs(gold)
-    y_heur = gold["Maximum_Monthly_Liters"].values if "Maximum_Monthly_Liters" in gold.columns else predict_latent_potential(gold)
     y_obs = gold["hist_median_vol"].values
+    q_col = gold["Quantile_Ceiling_Liters"].values if "Quantile_Ceiling_Liters" in gold.columns else None
+
+    if "Heuristic_Latent_Liters" in gold.columns:
+        y_heur_only = gold["Heuristic_Latent_Liters"].values
+    else:
+        y_heur_only = predict_heuristic_only(gold)
 
     rows = []
-    for model_name, y_pred in [(PRIMARY_MODEL_NAME, y_heur)]:
+    for model_name, y_pred in [(HEURISTIC_ONLY_MODEL_NAME, y_heur_only)]:
         m = compute_ceiling_metrics(y_pred, gold, y_obs=y_obs)
         m["Model"] = model_name
         m["eval_scope"] = "gold_snapshot_jan2026"
         m["observed_mae_vs_median"] = observed_mae(y_obs, y_pred)
         rows.append(m)
+
+    if q_col is not None:
+        y_prod = gold["Maximum_Monthly_Liters"].values if "Maximum_Monthly_Liters" in gold.columns else predict_latent_potential(
+            gold, quantile_ceiling=q_col, use_blend=USE_CEILING_QUANTILE_BLEND
+        )
+        prod_name = PRIMARY_MODEL_NAME if USE_CEILING_QUANTILE_BLEND else HEURISTIC_ONLY_MODEL_NAME
+        m_prod = compute_ceiling_metrics(y_prod, gold, y_obs=y_obs)
+        m_prod["Model"] = prod_name
+        m_prod["eval_scope"] = "gold_snapshot_jan2026"
+        m_prod["observed_mae_vs_median"] = observed_mae(y_obs, y_prod)
+        rows.append(m_prod)
+
+        if USE_CEILING_QUANTILE_BLEND and prod_name != HEURISTIC_ONLY_MODEL_NAME:
+            delta_rank = m_prod["rank_corr_ceiling_spearman"] - rows[0]["rank_corr_ceiling_spearman"]
+            delta_uplift = m_prod["uplift_censoring_spearman"] - rows[0]["uplift_censoring_spearman"]
+            logger.info(
+                "Gold Jan2026 blend vs heuristic-only: delta_rank_ceiling=%+.3f delta_uplift_cens=%+.3f",
+                delta_rank,
+                delta_uplift,
+            )
+
+    if "Quantile_Ceiling_Liters" in gold.columns:
+        y_q = gold["Quantile_Ceiling_Liters"].values
+        m_q = compute_ceiling_metrics(y_q, gold, y_obs=y_obs)
+        m_q["Model"] = CEILING_MODEL_NAME
+        m_q["eval_scope"] = "gold_snapshot_jan2026"
+        m_q["observed_mae_vs_median"] = observed_mae(y_obs, y_q)
+        rows.append(m_q)
 
     return pd.DataFrame(rows)
 
@@ -202,11 +244,9 @@ def walkforward_ceiling_validation() -> pd.DataFrame:
 
         val_df = ensure_heuristic_inputs(val_df)
         y_obs = val_df["actual"].values
-        y_heur = predict_latent_potential(val_df)
+        y_heur_only = predict_heuristic_only(val_df)
 
-        for model_name, y_pred in [
-            (PRIMARY_MODEL_NAME, y_heur),
-        ]:
+        for model_name, y_pred in [(HEURISTIC_ONLY_MODEL_NAME, y_heur_only)]:
             m = compute_ceiling_metrics(y_pred, val_df, y_obs=y_obs)
             m.update({
                 "Model": model_name,
@@ -217,7 +257,7 @@ def walkforward_ceiling_validation() -> pd.DataFrame:
             })
             rows.append(m)
 
-        # LightGBM benchmark on same fold (train on prior periods)
+        # LightGBM benchmark + ceiling quantile (train on prior periods)
         train_rows = []
         for p_idx in train_periods[-N_TRAIN_TARGETS * 2:]:
             yr, mo = p_idx // 12, p_idx % 12
@@ -253,7 +293,7 @@ def walkforward_ceiling_validation() -> pd.DataFrame:
 
         m_lgb = compute_ceiling_metrics(y_lgb, val_df, y_obs=y_obs)
         m_lgb.update({
-            "Model": "LightGBM Quantile (benchmark)",
+            "Model": "LightGBM Quantile (observed-sales benchmark)",
             "eval_scope": "walk_forward",
             "fold": fold_idx + 1,
             "observed_mae": observed_mae(y_obs, y_lgb),
@@ -261,15 +301,47 @@ def walkforward_ceiling_validation() -> pd.DataFrame:
         })
         rows.append(m_lgb)
 
-        logger.info(
-            "Fold %s | Heuristic ceiling_rank=%.3f uplift_cens=%.3f | LGBM ceiling_rank=%.3f observed_mae H=%.1f L=%.1f",
-            fold_idx + 1,
-            rows[-2]["rank_corr_ceiling_spearman"],
-            rows[-2]["uplift_censoring_spearman"],
-            m_lgb["rank_corr_ceiling_spearman"],
-            rows[-2]["observed_mae"],
-            m_lgb["observed_mae"],
-        )
+        train_panel_cq = train_panel.copy()
+        train_panel_cq["actual_vol"] = train_panel_cq["actual"]
+        ceiling_model, ceiling_cols = train_ceiling_quantile_model(train_panel_cq, feature_cols=cols)
+        y_ceil_q = predict_ceiling_quantile_liters(ceiling_model, val_df, ceiling_cols)
+        m_cq = compute_ceiling_metrics(y_ceil_q, val_df, y_obs=y_obs)
+        m_cq.update({
+            "Model": CEILING_MODEL_NAME,
+            "eval_scope": "walk_forward",
+            "fold": fold_idx + 1,
+            "observed_mae": observed_mae(y_obs, y_ceil_q),
+            "n_outlets": len(val_df),
+        })
+        rows.append(m_cq)
+
+        if USE_CEILING_QUANTILE_BLEND:
+            y_blend = predict_latent_potential(val_df, quantile_ceiling=y_ceil_q, use_blend=True)
+            m_blend = compute_ceiling_metrics(y_blend, val_df, y_obs=y_obs)
+            m_blend.update({
+                "Model": BLENDED_MODEL_NAME,
+                "eval_scope": "walk_forward",
+                "fold": fold_idx + 1,
+                "observed_mae": observed_mae(y_obs, y_blend),
+                "n_outlets": len(val_df),
+            })
+            rows.append(m_blend)
+            logger.info(
+                "Fold %s | Heur-only rank=%.3f | Blend rank=%.3f (d%+.3f) | Ceil-Q=%.3f",
+                fold_idx + 1,
+                rows[-4]["rank_corr_ceiling_spearman"],
+                m_blend["rank_corr_ceiling_spearman"],
+                m_blend["rank_corr_ceiling_spearman"] - rows[-4]["rank_corr_ceiling_spearman"],
+                m_cq["rank_corr_ceiling_spearman"],
+            )
+        else:
+            logger.info(
+                "Fold %s | Heur ceil_rank=%.3f | Ceil-Q rank=%.3f | Obs-LGBM rank=%.3f",
+                fold_idx + 1,
+                rows[-3]["rank_corr_ceiling_spearman"],
+                m_cq["rank_corr_ceiling_spearman"],
+                m_lgb["rank_corr_ceiling_spearman"],
+            )
 
     return pd.DataFrame(rows)
 
@@ -289,6 +361,55 @@ def main() -> None:
     out_path = OUTPUT / "ceiling_validation_report.csv"
     report.to_csv(out_path, index=False)
     logger.info("Ceiling validation report saved -> %s", out_path)
+
+    samples_dir = ROOT / "samples"
+    samples_dir.mkdir(parents=True, exist_ok=True)
+
+    summary_path = OUTPUT / "ceiling_validation_summary.json"
+    if not walkforward.empty:
+        wf_summary = (
+            walkforward.groupby("Model")
+            .agg(
+                rank_corr_ceiling_spearman=("rank_corr_ceiling_spearman", "mean"),
+                uplift_censoring_spearman=("uplift_censoring_spearman", "mean"),
+                pct_pred_exceeds_observed=("pct_pred_exceeds_observed", "mean"),
+                observed_mae=("observed_mae", "mean"),
+            )
+            .reset_index()
+        )
+        wf_summary.to_json(summary_path, orient="records", indent=2)
+        logger.info("Walk-forward ceiling summary -> %s", summary_path)
+
+        if USE_CEILING_QUANTILE_BLEND:
+            heur_row = wf_summary[wf_summary["Model"] == HEURISTIC_ONLY_MODEL_NAME]
+            blend_row = wf_summary[wf_summary["Model"] == BLENDED_MODEL_NAME]
+            if not heur_row.empty and not blend_row.empty:
+                comparison = {
+                    "use_ceiling_quantile_blend": True,
+                    "heuristic_only": heur_row.iloc[0].to_dict(),
+                    "blended_production": blend_row.iloc[0].to_dict(),
+                    "delta_rank_corr_ceiling": float(
+                        blend_row.iloc[0]["rank_corr_ceiling_spearman"]
+                        - heur_row.iloc[0]["rank_corr_ceiling_spearman"]
+                    ),
+                    "delta_uplift_censoring": float(
+                        blend_row.iloc[0]["uplift_censoring_spearman"]
+                        - heur_row.iloc[0]["uplift_censoring_spearman"]
+                    ),
+                }
+                cmp_path = OUTPUT / "ceiling_blend_comparison.json"
+                with open(cmp_path, "w", encoding="utf-8") as f:
+                    json.dump(comparison, f, indent=2)
+                shutil.copy(cmp_path, samples_dir / "ceiling_blend_comparison.json")
+                logger.info(
+                    "Blend vs heuristic-only (walk-forward mean): delta_rank=%+.3f delta_uplift_cens=%+.3f -> %s",
+                    comparison["delta_rank_corr_ceiling"],
+                    comparison["delta_uplift_censoring"],
+                    cmp_path,
+                )
+
+    if summary_path.exists():
+        shutil.copy(summary_path, samples_dir / "ceiling_validation_summary.json")
 
     if not walkforward.empty:
         summary = walkforward.groupby("Model").agg({

@@ -7,9 +7,13 @@
 
 ## Primary model (Option A)
 
-**Production predictions use the interpretable latent-demand heuristic** in `pipeline/latent_heuristic.py` — a multiplicative uncapping model driven by censoring score, peer ceiling, seasonality, and OSM catchment features.
+**Production predictions** combine the interpretable two-regime heuristic with a **ceiling-target LightGBM quantile** (blend weight increases with censoring score). See `pipeline/latent_heuristic.py` (`USE_CEILING_QUANTILE_BLEND = True`).
 
-**LightGBM / quantile regressors are benchmarks** fit to observed monthly sales for comparison only; they do not drive `Maximum_Monthly_Liters` in the submission file.
+- `Heuristic_Latent_Liters` — heuristic only (audit / XAI)
+- `Maximum_Monthly_Liters` — **submission column** (blended)
+- `Quantile_Ceiling_Liters` — statistical ceiling estimate
+
+**Observed-sales LightGBM** remains a benchmark only (`06_validation.py`).
 
 ---
 
@@ -130,8 +134,11 @@ Caches narratives for the top 200 outlets by potential (instant load in XAI tab)
 | `output/ceiling_validation_report.csv` | Ceiling-proxy metrics (rank corr, uplift, gap recovery) |
 | `pipeline/gold/heuristic_calibration.json` | Walk-forward calibrated uplift constants |
 | `output/model_benchmark_chronological.csv` | Short comparison from gold step |
-| `pipeline/gold/gold_features.parquet` | Full feature table |
+| `pipeline/gold/gold_features.parquet` | Full feature table (+ `Quantile_Ceiling_Liters`) |
+| `pipeline/gold/ceiling_quantile_model.pkl` | Trained ceiling quantile model |
+| `output/ceiling_validation_summary.json` | Ceiling validation aggregates |
 | `data/outlet_intelligence.db` | SQLite for web app |
+| `data/genai_transparency.jsonl` | Append-only GenAI audit log |
 
 ---
 
@@ -153,15 +160,41 @@ Constants `CENSORING_UPLIFT` and `CATCHMENT_UPLIFT` are recalibrated walk-forwar
 
 Then: floor vs history, cap at 5× `jan_base`, optional uplift for high censoring (`> 0.40`).
 
-### Ceiling validation (Priority 1)
+### Ceiling validation + quantile regression (Priority 1)
+
+**Statistical anchor:** LightGBM quantile (τ=0.90) on ceiling proxy — blended into `Maximum_Monthly_Liters` when `USE_CEILING_QUANTILE_BLEND = True` (current default).
+
+**Full methodology:** `deliverables/METHODOLOGY.md`
 
 ```bash
-python pipeline/08_ceiling_validation.py
+python run_pipeline.py --validate   # includes ceiling validation step
+# or: python pipeline/08_ceiling_validation.py
 ```
 
-Reports rank correlation to ceiling proxies, uplift–censoring monotonicity, and gap recovery vs LightGBM benchmark → `output/ceiling_validation_report.csv`.
+| Output | Purpose |
+|--------|---------|
+| `output/ceiling_validation_report.csv` | Per-fold ceiling metrics (heuristic vs ceiling-quantile vs observed-LGBM) |
+| `output/ceiling_validation_summary.json` | Judge-friendly aggregate |
+| `samples/ceiling_validation_summary.json` | Copy committed after validation run |
 
-See `pipeline/latent_heuristic.py` for constants and implementation.
+Primary metrics: Spearman rank vs ceiling proxy, uplift–censoring monotonicity, % predictions exceeding observed (gap recovery). **Do not judge latent demand using observed-sales MAE alone.**
+
+See `pipeline/latent_heuristic.py` for heuristic constants.
+
+### Budget optimization
+
+Shared parameters: `pipeline/optimization_config.py` — **LKR 5M**, **LKR 100k/outlet cap**. Details: `docs/OPTIMIZATION.md`.
+
+### Judge quickstart (10 min)
+
+1. `pip install -r requirements.txt`
+2. Place competition CSVs in `input/` (see table above)
+3. `python run_pipeline.py --validate`
+4. Review `samples/ceiling_validation_summary.json` and `deliverables/METHODOLOGY.md`
+5. `copy .env.example .env` (optional, for XAI)
+6. `python app/app.py`
+
+GenAI audit log: `data/genai_transparency.jsonl` (schema: `samples/genai_transparency.example.jsonl`).
 
 ---
 

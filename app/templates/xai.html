@@ -5,8 +5,8 @@
     <!-- Header -->
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
-            <h1 class="h2 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 700;">Explainable AI (XAI) Model</h1>
-            <p class="text-muted mb-0">Drivers behind the <strong>primary latent heuristic</strong> (exact multiplicative decomposition{% if explanation_type == 'heuristic_waterfall' %} — not simulated SHAP{% endif %}).</p>
+            <h1 class="page-title">Explainable AI (XAI) Model</h1>
+            <p class="page-subtitle">Drivers behind the <strong>primary latent heuristic</strong> (exact multiplicative decomposition{% if explanation_type == 'heuristic_waterfall' %} — not simulated SHAP{% endif %}).</p>
         </div>
         <div class="d-flex gap-2">
             <span class="badge-glass badge-blue"><i class="fa-solid fa-brain me-1"></i> {{ explanation_type | replace('_', ' ') | title }}</span>
@@ -35,7 +35,7 @@
                         Each feature value acts as a "player" in a game where the prediction is the payout. SHAP values distribute the payout among the features fairly, according to their marginal contributions.
                     </p>
                     <hr style="border-top: 1px solid var(--border-glass);">
-                    <h4 class="h6 text-white font-weight-bold mb-2">How to read local waterfall charts:</h4>
+                    <h4 class="h6 font-weight-bold mb-2" style="color: var(--text-primary);">How to read local waterfall charts:</h4>
                     <ul class="small text-muted ps-3 mb-0" style="line-height: 1.6;">
                         <li><strong class="text-success">Green values</strong> push the prediction upward (indicating high potential gaps, good catchments, or size factors).</li>
                         <li><strong class="text-danger">Red values</strong> drag the prediction downward (indicating supply caps, low growth, or high local competition).</li>
@@ -43,7 +43,7 @@
                     </ul>
                 </div>
                 <div class="mt-4">
-                    <a href="{{ url_for('outlets.view_outlets') }}" class="btn-glass btn-blue w-100 justify-content-center text-white py-2">
+                    <a href="{{ url_for('outlets.view_outlets') }}" class="btn-glass btn-blue w-100 justify-content-center py-2">
                         <i class="fa-solid fa-search me-1"></i> Audit Outlet Profiles
                     </a>
                 </div>
@@ -54,37 +54,45 @@
 
 <script>
     document.addEventListener("DOMContentLoaded", function() {
+        const rootStyle = getComputedStyle(document.documentElement);
+        const chartTheme = {
+            primary: rootStyle.getPropertyValue('--chart-series-1').trim() || '#2563EB',
+            secondary: rootStyle.getPropertyValue('--chart-series-2').trim() || '#06B6D4',
+            grid: rootStyle.getPropertyValue('--chart-grid').trim() || '#E9F2FF',
+            text: rootStyle.getPropertyValue('--text-secondary').trim() || '#334155',
+            muted: rootStyle.getPropertyValue('--text-muted').trim() || '#64748B',
+        };
+
         const rawImportance = {{ importance | tojson }};
-        
-        // Reverse order so highest appears at the top of horizontal chart
-        const sorted = rawImportance.reverse();
-        
-        const labels = sorted.map(item => {
-            return item.feature
-                .replace(/_gaussian_score/g, '')
-                .replace(/_/g, ' ')
-                .replace(/\b\w/g, c => c.toUpperCase());
-        });
+        const sorted = [...rawImportance].reverse();
+
+        const labels = sorted.map(item => item.feature
+            .replace(/_gaussian_score/g, '')
+            .replace(/_/g, ' ')
+            .replace(/\b\w/g, c => c.toUpperCase()));
         const values = sorted.map(item => item.mean_abs_shap);
-        
-        const trace = {
+
+        Plotly.newPlot('global-shap-chart', [{
             y: labels,
             x: values,
             type: 'bar',
             orientation: 'h',
-            marker: { color: 'rgba(213, 0, 249, 0.45)', border: {color: '#d500f9', width: 1} }
-        };
-        
-        const layout = {
+            marker: {
+                color: 'rgba(37, 99, 235, 0.75)',
+                line: { color: chartTheme.primary, width: 1 },
+            },
+        }], {
             paper_bgcolor: 'rgba(0,0,0,0)',
             plot_bgcolor: 'rgba(0,0,0,0)',
-            font: { color: '#9ca3af', family: 'Inter, sans-serif', size: 9 },
-            margin: { l: 180, r: 10, t: 10, b: 40 },
-            xaxis: { gridcolor: 'rgba(255,255,255,0.05)', title: 'Mean Absolute SHAP Value (Log Odds Scale)' },
-            yaxis: { autonext: true }
-        };
-        
-        Plotly.newPlot('global-shap-chart', [trace], layout, {displayModeBar: false});
+            font: { color: chartTheme.text, family: 'Inter, sans-serif', size: 11 },
+            margin: { l: 180, r: 16, t: 12, b: 40 },
+            xaxis: {
+                gridcolor: chartTheme.grid,
+                title: { text: 'Mean Absolute SHAP Value (Log Scale)', font: { color: chartTheme.muted, size: 11 } },
+                tickfont: { color: chartTheme.muted },
+            },
+            yaxis: { tickfont: { color: chartTheme.text } },
+        }, { displayModeBar: false, responsive: true });
     });
 </script>
 {% endblock %}

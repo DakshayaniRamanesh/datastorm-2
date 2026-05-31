@@ -1,5 +1,5 @@
 {
-  "run_timestamp": "2026-05-31T08:07:20.718975+00:00",
+  "run_timestamp": "2026-05-31T13:27:18.966084+00:00",
   "pipeline_stage": "Silver",
   "datasets": [
     {
@@ -33,12 +33,12 @@
     {
       "dataset": "holiday_list",
       "total_rows": 349,
-      "rejected_rows": 273,
-      "clean_rows": 76,
-      "rejection_rate_%": 78.2235
+      "rejected_rows": 0,
+      "clean_rows": 349,
+      "rejection_rate_%": 0.0
     }
   ],
   "total_rows_all_datasets": 2417098,
-  "total_rejected_all_datasets": 129054,
-  "overall_rejection_rate_%": 5.3392
+  "total_rejected_all_datasets": 128781,
+  "overall_rejection_rate_%": 5.3279
 }

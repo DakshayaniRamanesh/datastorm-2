@@ -140,16 +140,16 @@ class PredictionService:
         params = []
 
         if search_query:
-            where_clauses.append("(Outlet_ID LIKE ? OR primary_dist LIKE ?)")
+            where_clauses.append("(o.Outlet_ID LIKE ? OR o.primary_dist LIKE ?)")
             params.extend([f"%{search_query}%", f"%{search_query}%"])
         if outlet_type:
-            where_clauses.append("Outlet_Type = ?")
+            where_clauses.append("o.Outlet_Type = ?")
             params.append(outlet_type)
         if outlet_size:
-            where_clauses.append("Outlet_Size = ?")
+            where_clauses.append("o.Outlet_Size = ?")
             params.append(outlet_size)
         if distributor_id:
-            where_clauses.append("primary_dist = ?")
+            where_clauses.append("o.primary_dist = ?")
             params.append(distributor_id)
 
         where_sql = ""
@@ -168,23 +168,22 @@ class PredictionService:
             
         sort_dir = "DESC" if sort_dir.upper() == "DESC" else "ASC"
 
-        # Count query
-        count_query = f"SELECT COUNT(*) FROM outlets {where_sql}"
+        # Count query (alias matches data query WHERE clauses)
+        count_query = f"SELECT COUNT(*) FROM outlets o {where_sql}"
         total_count = self.db.execute_scalar(count_query, tuple(params))
 
-        # Data query (left join allocations to get active trade spend recommendations)
+        # Data query — subqueries avoid JOIN column ambiguity on Outlet_ID
         offset = (page - 1) * per_page
         data_query = f"""
-            SELECT o.*, 
-                   COALESCE(a.Trade_Spend_LKR, 0.0) as Trade_Spend_LKR,
-                   COALESCE(a.Expected_Lift, 0.0) as Expected_Lift,
-                   COALESCE(a.ROI, 0.0) as ROI,
-                   COALESCE(a.Expected_Revenue_LKR, 0.0) as Expected_Revenue_LKR,
-                   COALESCE(a.Revenue_ROI, 0.0) as Revenue_ROI
+            SELECT o.*,
+                   COALESCE((SELECT Trade_Spend_LKR FROM allocations a WHERE a.Outlet_ID = o.Outlet_ID LIMIT 1), 0.0) AS Trade_Spend_LKR,
+                   COALESCE((SELECT Expected_Lift FROM allocations a WHERE a.Outlet_ID = o.Outlet_ID LIMIT 1), 0.0) AS Expected_Lift,
+                   COALESCE((SELECT ROI FROM allocations a WHERE a.Outlet_ID = o.Outlet_ID LIMIT 1), 0.0) AS ROI,
+                   COALESCE((SELECT Expected_Revenue_LKR FROM allocations a WHERE a.Outlet_ID = o.Outlet_ID LIMIT 1), 0.0) AS Expected_Revenue_LKR,
+                   COALESCE((SELECT Revenue_ROI FROM allocations a WHERE a.Outlet_ID = o.Outlet_ID LIMIT 1), 0.0) AS Revenue_ROI
             FROM outlets o
-            LEFT JOIN allocations a ON o.Outlet_ID = a.Outlet_ID
             {where_sql}
-            ORDER BY {sort_by} {sort_dir}
+            ORDER BY o.{sort_by} {sort_dir}
             LIMIT ? OFFSET ?
         """
         data_params = params + [per_page, offset]

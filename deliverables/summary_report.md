@@ -1,6 +1,6 @@
 # DataStorm 2026: Latent Potential Prediction
 ## Technical Summary Report
-**Team:** Antigravity  
+**Team:** AI-ACES  
 **Date:** May 2026  
 
 ---
@@ -35,7 +35,9 @@ We utilized the **Overpass API (OpenStreetMap)** to dynamically scrape Points of
 ### 3. Causal Base Logic & Methodology
 The core challenge was solving the **left-censored demand curve**.
 
-**Production model (Option A):** Submissions use the **interpretable latent heuristic** (`pipeline/latent_heuristic.py`), not an auto-selected ML regressor. Quantile LightGBM/HGB models are trained on observed monthly volume **only as benchmarks** to compare fit quality on censored sales; they do not define `Maximum_Monthly_Liters`.
+**Production model (Option A):** Submissions use the **interpretable latent heuristic** (`pipeline/latent_heuristic.py`), not an auto-selected ML regressor on observed sales.
+
+**Statistical anchor:** A **ceiling-target LightGBM quantile** (τ=0.90) is trained on `max(hist_p90, hist_max, actual)` and saved as `Quantile_Ceiling_Liters` for validation (`pipeline/ceiling_quantile_model.py`, `08_ceiling_validation.py`). Observed-sales LightGBM/HGB remain benchmarks only.
 
 #### 3.1 The Censoring Score (The "Uncapping" Signal)
 We moved beyond simple "hits-max" logic to a 5-signal composite score to identify capped demand:
@@ -57,7 +59,7 @@ $$Potential = B_{jan} \cdot f_{size} \cdot f_{type} \cdot f_{season} \cdot (1 + 
 ---
 
 ### 4. GenAI Transparency Log
-Generative AI (Antigravity/LLM) was used as a **Data Engineering Accelerator** rather than a "black box" predictor.
+Generative AI (AI-ACES workflow / LLM) was used as a **Data Engineering Accelerator** rather than a "black box" predictor. Runtime narratives are logged to `data/genai_transparency.jsonl` (see `samples/genai_transparency.example.jsonl`).
 
 | Phase | AI Application | Rationale |
 | :--- | :--- | :--- |

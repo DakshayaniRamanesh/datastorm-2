@@ -6,8 +6,13 @@ Reads validation_report.csv and renders chronological holdout comparison tables.
 """
 
 import csv
+import json
+from pathlib import Path
+
 from flask import Blueprint, render_template, abort
 from app.services.instances import xai
+
+ROOT = Path(__file__).resolve().parents[2]
 
 xai_bp = Blueprint("xai", __name__)
 
@@ -82,9 +87,37 @@ def view_reports():
             "r2": round(sum(vals["r2"]) / len(vals["r2"]), 4)
         })
 
+    ceiling_summary = None
+    ceiling_blend_comparison = None
+    for path in (
+        ROOT / "samples" / "ceiling_validation_summary.json",
+        ROOT / "output" / "ceiling_validation_summary.json",
+    ):
+        if path.exists():
+            try:
+                with open(path, encoding="utf-8") as f:
+                    ceiling_summary = json.load(f)
+                break
+            except (json.JSONDecodeError, OSError):
+                pass
+
+    for path in (
+        ROOT / "samples" / "ceiling_blend_comparison.json",
+        ROOT / "output" / "ceiling_blend_comparison.json",
+    ):
+        if path.exists():
+            try:
+                with open(path, encoding="utf-8") as f:
+                    ceiling_blend_comparison = json.load(f)
+                break
+            except (json.JSONDecodeError, OSError):
+                pass
+
     return render_template(
         "reports.html",
         active_page="reports",
         report_rows=rows,
-        averages=averages
+        averages=averages,
+        ceiling_summary=ceiling_summary,
+        ceiling_blend_comparison=ceiling_blend_comparison,
     )

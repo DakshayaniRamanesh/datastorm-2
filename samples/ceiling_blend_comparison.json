@@ -1,0 +1,19 @@
+{
+  "use_ceiling_quantile_blend": true,
+  "heuristic_only": {
+    "Model": "Heuristic_Latent_TwoRegime",
+    "rank_corr_ceiling_spearman": 0.8700748093265395,
+    "uplift_censoring_spearman": 0.1403512727358808,
+    "pct_pred_exceeds_observed": 59.854916079502345,
+    "observed_mae": 111.70414928349807
+  },
+  "blended_production": {
+    "Model": "Heuristic_Quantile_Blend",
+    "rank_corr_ceiling_spearman": 0.8715860665892537,
+    "uplift_censoring_spearman": 0.17865637515570365,
+    "pct_pred_exceeds_observed": 61.14660938602154,
+    "observed_mae": 111.74648487028513
+  },
+  "delta_rank_corr_ceiling": 0.0015112572627142828,
+  "delta_uplift_censoring": 0.03830510241982285
+}

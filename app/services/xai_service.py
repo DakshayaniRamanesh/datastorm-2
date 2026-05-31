@@ -293,24 +293,49 @@ Respond with ONLY valid JSON (no markdown) using exactly these keys:
 
         prompt = self._build_grounded_prompt(outlet_data)
         narrative = None
+        try:
+            from app.services.genai_transparency import log_narrative_request
+        except ModuleNotFoundError:
+            from services.genai_transparency import log_narrative_request
 
         if os.environ.get("HF_TOKEN") or os.environ.get("HUGGINGFACE_API_KEY"):
             try:
                 logger.info("Calling Hugging Face Inference API for %s...", outlet_id)
                 narrative = self._call_huggingface(prompt)
+                log_narrative_request(
+                    outlet_id,
+                    prompt,
+                    source=narrative.get("_source", "huggingface"),
+                    model_id=narrative.get("_model"),
+                    success=True,
+                )
             except Exception as e:
                 logger.error("Hugging Face request failed: %s", e)
+                log_narrative_request(
+                    outlet_id, prompt, source="huggingface", success=False, error=str(e)
+                )
 
         if narrative is None and os.environ.get("ANTHROPIC_API_KEY"):
             try:
                 logger.info("Calling Anthropic Claude for %s...", outlet_id)
                 narrative = self._call_claude(prompt)
+                log_narrative_request(
+                    outlet_id,
+                    prompt,
+                    source=narrative.get("_source", "anthropic"),
+                    model_id=os.environ.get("ANTHROPIC_MODEL"),
+                    success=True,
+                )
             except Exception as e:
                 logger.error("Claude request failed: %s", e)
+                log_narrative_request(
+                    outlet_id, prompt, source="anthropic", success=False, error=str(e)
+                )
 
         if narrative is None:
             logger.info("Using rules-engine narrative for %s", outlet_id)
             narrative = self._rules_narrative(outlet_data)
+            log_narrative_request(outlet_id, prompt, source="rules_engine", success=True)
 
         cache[outlet_id] = narrative
         try:

@@ -144,6 +144,9 @@ Examples:
         print(f"    Validation     -> output/validation_report.csv")
         print(f"    Val Curves     -> output/validation_curves.png")
         print(f"    Ceiling Val.   -> output/ceiling_validation_report.csv")
+        print(f"    Ceiling Summ.  -> output/ceiling_validation_summary.json")
+        print(f"                   -> samples/ceiling_validation_summary.json")
+        print(f"    Blend compare  -> output/ceiling_blend_comparison.json")
         print(f"    Calibration    -> pipeline/gold/heuristic_calibration.json")
     if not args.no_compare:
         print(f"    Comparison     -> output/comparison_analysis.png")

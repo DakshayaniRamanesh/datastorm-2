@@ -25,12 +25,21 @@ sys.path.append(str(Path(__file__).parent))
 
 from latent_heuristic import (
     PRIMARY_MODEL_NAME,
+    USE_CEILING_QUANTILE_BLEND,
     compute_heuristic_potential,
     finalize_latent_predictions,
     ensure_heuristic_inputs,
+    predict_heuristic_only,
+    predict_latent_potential,
 )
 from heuristic_attribution import compute_heuristic_attributions
 from poi_catchment import enrich_catchment_features
+from ceiling_quantile_model import (
+    CEILING_MODEL_NAME,
+    predict_ceiling_quantile_liters,
+    train_ceiling_quantile_model,
+)
+from holiday_features import load_silver_holidays, month_holiday_features
 
 # Suppress warnings
 warnings.filterwarnings("ignore")
@@ -189,14 +198,8 @@ def build_training_records(
     all_periods = [p for p in all_periods if p != (2026, 1)]
     target_periods = all_periods[-n_months:]
     
-    # Load holiday calendar for Priority 4
-    holiday_path = SILVER / "holiday_list.parquet"
-    holidays = None
-    if holiday_path.exists():
-        holidays = pd.read_parquet(holiday_path)
-        holidays["Date"] = pd.to_datetime(holidays["Date"])
-        holidays["Year"] = holidays["Date"].dt.year
-        holidays["Month"] = holidays["Date"].dt.month
+    # Load holiday calendar
+    holidays = load_silver_holidays(SILVER / "holiday_list.parquet")
         
     records = []
     for (yr, mo) in target_periods:
@@ -248,14 +251,10 @@ def build_training_records(
         feats = feats[feats["actual_vol"] > 0].copy()
         feats["target_log_vol"] = np.log1p(feats["actual_vol"])
         
-        # Holiday features (Priority 4)
-        if holidays is not None:
-            target_holidays = holidays[(holidays["Year"] == yr) & (holidays["Month"] == mo)]
-            holiday_count = len(target_holidays)
-        else:
-            holiday_count = 0
-        feats["jan_holiday_count"] = holiday_count
-        feats["high_holiday_month"] = int(holiday_count >= 3)
+        # Holiday features (weighted Poya vs high-effect tiers)
+        hstats = month_holiday_features(holidays, yr, mo)
+        for col, val in hstats.items():
+            feats[col] = val
         
         records.append(feats)
         
@@ -340,18 +339,21 @@ def main():
     gold_feats["target_season_factor"] = gold_feats["jan_season_factor"]
     gold_feats["target_month"] = 1
     
-    # Load holiday calendar for Priority 4
-    holiday_path = SILVER / "holiday_list.parquet"
-    if holiday_path.exists():
-        holidays_jan = pd.read_parquet(holiday_path)
-        holidays_jan["Date"] = pd.to_datetime(holidays_jan["Date"])
-        jan_holidays = holidays_jan[(holidays_jan["Date"].dt.year == 2026) & (holidays_jan["Date"].dt.month == 1)]
-        holiday_count_jan = len(jan_holidays)
-    else:
-        holiday_count_jan = 0
-    gold_feats["jan_holiday_count"] = holiday_count_jan
-    gold_feats["high_holiday_month"] = int(holiday_count_jan >= 3)
-    logger.info(f"January 2026 public holidays: {holiday_count_jan}")
+    # Load holiday calendar (weighted tiers: Poya vs high-effect)
+    holidays = load_silver_holidays(SILVER / "holiday_list.parquet")
+    hstats_jan = month_holiday_features(holidays, 2026, 1)
+    for col, val in hstats_jan.items():
+        gold_feats[col] = val
+    gold_feats["jan_holiday_poya_count"] = hstats_jan["holiday_poya_count"]
+    gold_feats["jan_holiday_high_effect_count"] = hstats_jan["holiday_high_effect_count"]
+    gold_feats["jan_holiday_weighted_score"] = hstats_jan["holiday_weighted_score"]
+    logger.info(
+        "January 2026 holidays — total=%s poya=%s high_effect=%s weighted_score=%.1f",
+        hstats_jan["holiday_total_count"],
+        hstats_jan["holiday_poya_count"],
+        hstats_jan["holiday_high_effect_count"],
+        hstats_jan["holiday_weighted_score"],
+    )
     
     # Interpretability factors
     gold_feats["size_factor"] = gold_feats["Outlet_Size"].map(SIZE_POTENTIAL_FACTOR).fillna(1.0)
@@ -518,7 +520,10 @@ def main():
         "market_accessibility", "population_proxy", "peer_efficiency_gap",
         "outlet_efficiency_index", "seasonality_strength", "local_peer_performance",
         "regional_peer_performance", "hyperlocal_competition",
-        "jan_holiday_count", "high_holiday_month"
+        "jan_holiday_count", "high_holiday_month",
+        "holiday_poya_count", "holiday_high_effect_count", "holiday_weighted_score",
+        "holiday_total_count",
+        "jan_holiday_poya_count", "jan_holiday_high_effect_count", "jan_holiday_weighted_score",
     ]
     
     # Verify presence in dataframes
@@ -626,12 +631,40 @@ def main():
     ])
     benchmark_report.to_csv(OUTPUT / "model_benchmark_chronological.csv", index=False)
 
-    # 7. January 2026 predictions — always latent heuristic (Option A)
-    logger.info("Generating January 2026 predictions with primary latent heuristic...")
+    # 6b. Ceiling-target quantile model (statistical validation anchor)
+    logger.info("Training ceiling-target LightGBM quantile (alpha=0.90)...")
+    train_panel_cq = train_panel.copy()
+    if "actual_vol" not in train_panel_cq.columns:
+        train_panel_cq["actual_vol"] = train_panel_cq.get("actual", np.expm1(train_panel_cq["target_log_vol"].values))
+    ceiling_model, ceiling_feat_cols = train_ceiling_quantile_model(
+        train_panel_cq, feature_cols=feature_cols
+    )
+    gold_feats["Quantile_Ceiling_Liters"] = np.round(
+        predict_ceiling_quantile_liters(ceiling_model, gold_feats, ceiling_feat_cols), 2
+    )
+    gold_feats["ceiling_quantile_model"] = CEILING_MODEL_NAME
+    with open(GOLD_DIR / "ceiling_quantile_model.pkl", "wb") as f:
+        pickle.dump({"model": ceiling_model, "feature_cols": ceiling_feat_cols}, f)
+    logger.info(
+        "Ceiling quantile predictions — median=%.1f L | heuristic median will be computed next",
+        gold_feats["Quantile_Ceiling_Liters"].median(),
+    )
+
+    # 7. January 2026 predictions — heuristic + optional ceiling-quantile blend (production)
+    logger.info(
+        "Generating January 2026 predictions (%s, blend=%s)...",
+        PRIMARY_MODEL_NAME,
+        USE_CEILING_QUANTILE_BLEND,
+    )
     gold_feats = ensure_heuristic_inputs(gold_feats)
     raw_heur = compute_heuristic_potential(gold_feats)
-    gold_feats["Maximum_Monthly_Liters"] = finalize_latent_predictions(raw_heur, gold_feats)
+    q_ceiling = gold_feats["Quantile_Ceiling_Liters"].values
+    gold_feats["Maximum_Monthly_Liters"] = predict_latent_potential(
+        gold_feats, quantile_ceiling=q_ceiling
+    )
+    gold_feats["Heuristic_Latent_Liters"] = predict_heuristic_only(gold_feats)
     gold_feats["primary_model"] = PRIMARY_MODEL_NAME
+    gold_feats["use_ceiling_quantile_blend"] = USE_CEILING_QUANTILE_BLEND
     gold_feats["ml_benchmark_best"] = best_ml_benchmark
 
     # Retrain best ML benchmark only for SHAP comparison / diagnostics (optional)

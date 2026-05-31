@@ -51,6 +51,11 @@ import pandas as pd
 import numpy as np
 
 import dq_checks as dq
+from holiday_features import (
+    parse_holiday_dates,
+    enrich_holiday_tiers,
+    dedupe_calendar_days,
+)
 
 # ---------------------------------------------------------------------------
 # Paths
@@ -356,32 +361,38 @@ def clean_holiday_list() -> dict:
     df = load_bronze("holiday_list")
     original_count = len(df)
 
-    # Parse dates and flag bad formats
-    df["Date_parsed"] = pd.to_datetime(df["Date"], errors="coerce", utc=True)
-    bad_date_mask = df["Date_parsed"].isna()
+    # [E1] Parse ISO8601 / plain dates (dayfirst breaks on Z-suffixed timestamps)
+    parsed = parse_holiday_dates(df["Date"])
+    bad_date_mask = parsed.isna()
     rej = df[bad_date_mask].copy()
     rej["dq_failure_reason"] = f"[{dataset}] [E1] Unparseable date value"
     rejected_all = dq.accumulate_rejected(rejected_all, rej)
     df = df[~bad_date_mask].copy()
-    df["Date"] = df["Date_parsed"].dt.date
-    df.drop(columns=["Date_parsed"], inplace=True)
+    df["Date"] = parsed[~bad_date_mask]
     print(f"    [E1] Bad date format records: {len(rej):,}")
 
     # Null check
-    df, rej = dq.check_nulls(df, mandatory_fields=["Date","Holiday_Name"],
-                              dataset_name=dataset)
+    df, rej = dq.check_nulls(
+        df, mandatory_fields=["Date", "Holiday_Name"], dataset_name=dataset
+    )
     rejected_all = dq.accumulate_rejected(rejected_all, rej)
 
-    # Duplicate dates
-    df, rej = dq.check_duplicates(df, primary_key="Date", dataset_name=dataset)
-    rejected_all = dq.accumulate_rejected(rejected_all, rej)
-    print(f"    Duplicate date entries: {len(rej):,}")
+    # Classify tiers + dedupe repeated Public/Bank/Mercantile rows per calendar day
+    df["Date"] = pd.to_datetime(df["Date"]).dt.normalize()
+    df = enrich_holiday_tiers(df)
+    before_dedupe = len(df)
+    df = dedupe_calendar_days(df)
+    dedupe_dropped = before_dedupe - len(df)
+    df["Date"] = pd.to_datetime(df["Date"]).dt.date
+    print(f"    [E2] Duplicate calendar-day rows collapsed: {dedupe_dropped:,}")
+    print(f"    Unique calendar holidays retained: {len(df):,}")
 
     print(f"    TOTAL rejected: {len(rejected_all):,} / {original_count:,}")
     print(f"    Clean rows: {len(df):,}")
 
     df.to_parquet(SILVER_DIR / "holiday_list.parquet", index=False)
-    dq.save_rejected(rejected_all, REJECTED_DIR / "holiday_list_rejected.csv")
+    if len(rejected_all):
+        dq.save_rejected(rejected_all, REJECTED_DIR / "holiday_list_rejected.csv")
     return {"dataset": dataset, "total_rows": original_count, "rejected_rows": len(rejected_all)}
 
 

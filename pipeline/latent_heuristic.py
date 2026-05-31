@@ -18,8 +18,8 @@ import pandas as pd
 from poi_catchment import enrich_catchment_features
 
 # Uplift weights — recalibrate via pipeline/calibrate_heuristic.py (walk-forward ceiling targets)
-CENSORING_UPLIFT = 1.0460
-CATCHMENT_UPLIFT = 0.9872
+CENSORING_UPLIFT = 1.0327
+CATCHMENT_UPLIFT = 0.9752
 
 # Two-regime blend: censoring_score in [0, BLEND_START] -> baseline; >= BLEND_FULL -> full latent
 REGIME_BLEND_START = 0.15
@@ -31,7 +31,15 @@ MAX_POTENTIAL_MULTIPLIER = 5.0
 MIN_PREDICTION_LITERS = 1.0
 MIN_FLOOR_VS_MEDIAN_RATIO = 0.05
 
-PRIMARY_MODEL_NAME = "Heuristic_Latent_TwoRegime"
+HEURISTIC_ONLY_MODEL_NAME = "Heuristic_Latent_TwoRegime"
+BLENDED_MODEL_NAME = "Heuristic_Quantile_Blend"
+
+# When True, submission blends heuristic with ceiling-target quantile (weight ↑ with censoring).
+USE_CEILING_QUANTILE_BLEND = True
+
+PRIMARY_MODEL_NAME = (
+    BLENDED_MODEL_NAME if USE_CEILING_QUANTILE_BLEND else HEURISTIC_ONLY_MODEL_NAME
+)
 
 
 def ensure_heuristic_inputs(df: pd.DataFrame) -> pd.DataFrame:
@@ -148,11 +156,37 @@ def finalize_latent_predictions(raw: np.ndarray, df: pd.DataFrame) -> np.ndarray
     return np.round(pred, 2)
 
 
-def predict_latent_potential(
+def predict_heuristic_only(
     df: pd.DataFrame,
     censoring_uplift: float | None = None,
     catchment_uplift: float | None = None,
 ) -> np.ndarray:
-    """End-to-end production prediction (blend + finalize)."""
+    """Heuristic two-regime prediction only (no ceiling quantile blend)."""
     raw = compute_heuristic_potential(df, censoring_uplift, catchment_uplift)
     return finalize_latent_predictions(raw, df)
+
+
+def predict_latent_potential(
+    df: pd.DataFrame,
+    censoring_uplift: float | None = None,
+    catchment_uplift: float | None = None,
+    quantile_ceiling: np.ndarray | None = None,
+    *,
+    use_blend: bool | None = None,
+) -> np.ndarray:
+    """End-to-end production prediction (heuristic, or censoring-weighted quantile blend)."""
+    heur_final = predict_heuristic_only(df, censoring_uplift, catchment_uplift)
+    blend_on = USE_CEILING_QUANTILE_BLEND if use_blend is None else use_blend
+
+    if blend_on and quantile_ceiling is not None:
+        d = ensure_heuristic_inputs(df)
+        from ceiling_quantile_model import blend_heuristic_with_quantile
+
+        blended = blend_heuristic_with_quantile(
+            heur_final,
+            quantile_ceiling,
+            d["censoring_score"].values,
+        )
+        return finalize_latent_predictions(blended, d)
+
+    return heur_final

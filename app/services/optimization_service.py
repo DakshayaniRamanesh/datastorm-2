@@ -7,20 +7,34 @@ results to the SQLite 'allocations' table, dynamically updating the entire platf
 """
 
 import logging
-import importlib
+import importlib.util
+import sys
 import numpy as np
+from pathlib import Path
 from typing import Dict, Any, List, Optional, Union
 
 from app.services.db_service import DBService
 
-budget_optimizer = importlib.import_module("pipeline.05_budget_optimizer")
+ROOT = Path(__file__).resolve().parents[2]
+PIPELINE_DIR = ROOT / "pipeline"
+if str(PIPELINE_DIR) not in sys.path:
+    sys.path.insert(0, str(PIPELINE_DIR))
+
+import optimization_config as opt_config  # noqa: E402
+
+_bo_spec = importlib.util.spec_from_file_location(
+    "budget_optimizer", PIPELINE_DIR / "05_budget_optimizer.py"
+)
+budget_optimizer = importlib.util.module_from_spec(_bo_spec)
+_bo_spec.loader.exec_module(budget_optimizer)
 allocate_budget_bisection = budget_optimizer.allocate_budget_bisection
 derive_median_price_per_liter = budget_optimizer.derive_median_price_per_liter
 
 logger = logging.getLogger("OptimizationService")
 
-ALPHA = 0.15
-BETA = 10000.0
+ALPHA = opt_config.ALPHA  # noqa: F401 — re-exported for callers
+BETA = opt_config.BETA
+MAX_SPEND_PER_OUTLET_LKR = opt_config.MAX_SPEND_PER_OUTLET_LKR
 
 
 class OptimizationService:
@@ -33,8 +47,12 @@ class OptimizationService:
             self._price_per_liter = derive_median_price_per_liter()
         return self._price_per_liter
 
-    def run_optimization(self, total_budget: float, max_spend_cap: Optional[float] = None) -> Dict[str, Any]:
-        """Allocate budget proportional to opportunity gap (no per-outlet cap unless provided)."""
+    def run_optimization(
+        self,
+        total_budget: float,
+        max_spend_cap: Optional[float] = None,
+    ) -> Dict[str, Any]:
+        """Allocate budget by opportunity gap with shared LKR per-outlet cap (parity)."""
         query = """
             SELECT Outlet_ID, hist_median_vol, Maximum_Monthly_Liters
             FROM outlets
@@ -50,8 +68,7 @@ class OptimizationService:
         predicted_potentials = np.array([o["Maximum_Monthly_Liters"] for o in outlets])
         potentials_gap = np.clip(predicted_potentials - hist_vols, 0.0, None)
 
-        # Default: only the total budget binds; spend follows opportunity gap weights
-        per_outlet_max = max_spend_cap if max_spend_cap is not None else total_budget
+        per_outlet_max = max_spend_cap if max_spend_cap is not None else MAX_SPEND_PER_OUTLET_LKR
 
         logger.info(
             "Running optimization: budget=%s on %s outlets (gap-weighted, max_outlet=%s)",
@@ -129,6 +146,9 @@ class OptimizationService:
             "average_revenue_roi": avg_rev_roi,
             "allocations_sample": details[:100],
             "total_funded_percent": round((active_allocations / N) * 100, 1),
+            "max_spend_per_outlet_lkr": per_outlet_max,
+            "alpha": ALPHA,
+            "beta": BETA,
         }
 
     def get_current_allocations_summary(self) -> Dict[str, Any]:

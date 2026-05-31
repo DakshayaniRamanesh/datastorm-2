@@ -166,10 +166,10 @@
                                     </div>
                                 </div>
                             </td>
-                            <td><span class="module-badge"><i class="fa-solid fa-location-dot"></i> {{ o.province.replace(' Province', '') | upper }}</span></td>
-                            <td><span class="id-pill">{{ "{:,.0f}".format(o.Maximum_Monthly_Liters or 0) }} L</span></td>
-                            <td><span class="metric-positive">+{{ "{:,.0f}".format(o.opportunity_gap or 0) }}</span></td>
-                            <td><span class="id-pill">+{{ o.uplift_pct }}%</span></td>
+                            <td><span class="dash-table-tag">{{ o.province.replace(' Province', '') }}</span></td>
+                            <td><span class="dash-table-val">{{ "{:,.0f}".format(o.Maximum_Monthly_Liters or 0) }} L</span></td>
+                            <td><span class="dash-table-val dash-table-val--positive">+{{ "{:,.0f}".format(o.opportunity_gap or 0) }}</span></td>
+                            <td><span class="dash-table-val">+{{ o.uplift_pct }}%</span></td>
                         </tr>
                         {% endfor %}
                     </tbody>
@@ -196,14 +196,14 @@
                                 <div class="cell-user">
                                     <span class="cell-avatar">{{ (b.Outlet_ID or 'B')[:1] }}</span>
                                     <div>
-                                        <div class="cell-primary">{{ b.Outlet_ID }}</div>
+                                        <a href="{{ url_for('outlets.view_outlet_detail', outlet_id=b.Outlet_ID) }}" class="cell-primary text-decoration-none">{{ b.Outlet_ID }}</a>
                                         <div class="cell-secondary">{{ b.Outlet_Type or 'Allocated' }}</div>
                                     </div>
                                 </div>
                             </td>
-                            <td><span class="id-pill">LKR {{ "{:,.0f}".format(b.Trade_Spend_LKR or 0) }}</span></td>
-                            <td><span class="id-pill">{{ "{:,.1f}".format(b.Expected_Lift or 0) }} L</span></td>
-                            <td><span class="module-badge"><i class="fa-solid fa-chart-line"></i> {{ "%.2f" | format(b.Revenue_ROI or 0) }}</span></td>
+                            <td><span class="dash-table-val">LKR {{ "{:,.0f}".format(b.Trade_Spend_LKR or 0) }}</span></td>
+                            <td><span class="dash-table-val">{{ "{:,.1f}".format(b.Expected_Lift or 0) }} L</span></td>
+                            <td><span class="dash-table-val dash-table-val--accent">{{ "%.2f" | format(b.Revenue_ROI or 0) }}</span></td>
                         </tr>
                         {% endfor %}
                         {% else %}

@@ -95,6 +95,7 @@ LGB_PARAMS = {
 # Vectorized Feature Builder (imported from shared feature_builder)
 # ---------------------------------------------------------------------------
 from feature_builder import build_outlet_features
+from holiday_features import load_silver_holidays, month_holiday_features
 
 def add_dist_stats(monthly: pd.DataFrame) -> pd.DataFrame:
     dist_med = monthly.groupby(["Distributor_ID", "Month"])["monthly_volume"].median().rename("dist_month_median").reset_index()
@@ -114,14 +115,7 @@ def build_training_panel_for_window(
     sorted_periods = sorted(train_periods)
     target_periods = sorted_periods[-n_train_targets:]
     
-    # Load holiday calendar for Priority 4
-    holiday_path = SILVER / "holiday_list.parquet"
-    holidays = None
-    if holiday_path.exists():
-        holidays = pd.read_parquet(holiday_path)
-        holidays["Date"] = pd.to_datetime(holidays["Date"])
-        holidays["Year"] = holidays["Date"].dt.year
-        holidays["Month"] = holidays["Date"].dt.month
+    holidays = load_silver_holidays(SILVER / "holiday_list.parquet")
         
     records = []
     for p_idx in target_periods:
@@ -167,14 +161,9 @@ def build_training_panel_for_window(
         feats = feats[feats["actual_vol"] > 0].copy()
         feats["target_log_vol"] = np.log1p(feats["actual_vol"])
         
-        # Holiday features (Priority 4)
-        if holidays is not None:
-            target_holidays = holidays[(holidays["Year"] == yr) & (holidays["Month"] == mo)]
-            holiday_count = len(target_holidays)
-        else:
-            holiday_count = 0
-        feats["jan_holiday_count"] = holiday_count
-        feats["high_holiday_month"] = int(holiday_count >= 3)
+        hstats = month_holiday_features(holidays, yr, mo)
+        for col, val in hstats.items():
+            feats[col] = val
         
         records.append(feats)
         
@@ -202,14 +191,7 @@ def main():
     outlet = pd.read_parquet(SILVER / "outlet_master.parquet")
     season = pd.read_parquet(SILVER / "distributor_seasonality.parquet")
     
-    # Load holiday calendar for Priority 4 in validation main
-    holiday_path = SILVER / "holiday_list.parquet"
-    holidays = None
-    if holiday_path.exists():
-        holidays = pd.read_parquet(holiday_path)
-        holidays["Date"] = pd.to_datetime(holidays["Date"])
-        holidays["Year"] = holidays["Date"].dt.year
-        holidays["Month"] = holidays["Date"].dt.month
+    holidays = load_silver_holidays(SILVER / "holiday_list.parquet")
         
     poi_path = POI_CACHE / "poi_features.parquet"
     poi_df = pd.read_parquet(poi_path) if poi_path.exists() else pd.DataFrame()
@@ -309,7 +291,8 @@ def main():
             "market_accessibility", "population_proxy", "peer_efficiency_gap",
             "outlet_efficiency_index", "seasonality_strength", "local_peer_performance",
             "regional_peer_performance", "hyperlocal_competition",
-            "jan_holiday_count", "high_holiday_month"
+            "jan_holiday_count", "high_holiday_month",
+            "holiday_poya_count", "holiday_high_effect_count", "holiday_weighted_score",
         ]
         feature_cols = [c for c in feature_cols if c in train_panel.columns]
         
@@ -365,14 +348,9 @@ def main():
             val_feats["size_factor"] = val_feats["Outlet_Size"].map(SIZE_POTENTIAL_FACTOR).fillna(1.0)
             val_feats["type_factor"] = val_feats["Outlet_Type"].map(TYPE_POTENTIAL_FACTOR).fillna(1.0)
             
-            # Holiday features for validation (Priority 4)
-            if holidays is not None:
-                target_holidays = holidays[(holidays["Year"] == yr) & (holidays["Month"] == mo)]
-                holiday_count = len(target_holidays)
-            else:
-                holiday_count = 0
-            val_feats["jan_holiday_count"] = holiday_count
-            val_feats["high_holiday_month"] = int(holiday_count >= 3)
+            hstats = month_holiday_features(holidays, yr, mo)
+            for col, val in hstats.items():
+                val_feats[col] = val
             
             if not poi_df.empty:
                 drop_cols = [c for c in ["poi_lat", "poi_lon", "Latitude", "Longitude"] if c in poi_df.columns]

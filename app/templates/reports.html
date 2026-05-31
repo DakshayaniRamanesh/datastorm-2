@@ -13,6 +13,49 @@
         </div>
     </div>
 
+    {% if ceiling_blend_comparison %}
+    <div class="command-panel p-4 mb-4 border-start border-3" style="border-color: var(--color-gold) !important;">
+        <h3 class="h6 mb-2 font-weight-bold">Heuristic-only vs blended production (walk-forward)</h3>
+        <p class="text-muted small mb-3">
+            Δ rank vs ceiling: <strong>{{ "%+.3f"|format(ceiling_blend_comparison.delta_rank_corr_ceiling) }}</strong>
+            &nbsp;|&nbsp; Δ uplift vs censoring: <strong>{{ "%+.3f"|format(ceiling_blend_comparison.delta_uplift_censoring) }}</strong>
+        </p>
+    </div>
+    {% endif %}
+
+    {% if ceiling_summary %}
+    <div class="command-panel p-4 mb-4">
+        <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">
+            Ceiling validation (latent potential) — walk-forward means
+        </h3>
+        <p class="text-muted small">Primary finals metric set. See <code>deliverables/METHODOLOGY.md</code>.</p>
+        <div class="table-responsive">
+            <table class="table-glass">
+                <thead>
+                    <tr>
+                        <th>Model</th>
+                        <th>Rank ρ vs ceiling</th>
+                        <th>Uplift ρ vs censoring</th>
+                        <th>% pred &gt; observed</th>
+                        <th>Observed MAE (secondary)</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for row in ceiling_summary %}
+                    <tr {% if 'Heuristic' in row.Model %}style="background: rgba(34, 197, 94, 0.06);"{% endif %}>
+                        <td>{{ row.Model }}</td>
+                        <td>{{ "%.3f"|format(row.rank_corr_ceiling_spearman) }}</td>
+                        <td>{{ "%.3f"|format(row.uplift_censoring_spearman) }}</td>
+                        <td>{{ "%.1f"|format(row.pct_pred_exceeds_observed) }}%</td>
+                        <td>{{ "%.1f"|format(row.observed_mae) }} L</td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+    {% endif %}
+
     {% if report_rows %}
     <!-- Model Averages Panel -->
     <div class="command-panel p-4 mb-4">

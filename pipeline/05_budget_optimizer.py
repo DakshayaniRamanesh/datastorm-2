@@ -31,15 +31,22 @@ logger = logging.getLogger("BudgetOptimizer")
 
 # Paths
 ROOT = Path(__file__).parent.parent
+PIPELINE_DIR = Path(__file__).parent
+if str(PIPELINE_DIR) not in sys.path:
+    sys.path.insert(0, str(PIPELINE_DIR))
+
 GOLD = ROOT / "pipeline" / "gold"
 OUTPUT = ROOT / "output"
 OUTPUT.mkdir(parents=True, exist_ok=True)
 
-# Parameters
-BUDGET_LKR = 5000000.0
-MAX_SPEND_PER_OUTLET_LKR = 100000.0  # Parity cap per outlet
-ALPHA = 0.15
-BETA = 10000.0
+from optimization_config import (
+    ALPHA,
+    BETA,
+    BISection_MAX_ITER,
+    BUDGET_LKR,
+    MAX_SPEND_PER_OUTLET_LKR,
+)
+
 SILVER = ROOT / "pipeline" / "silver"
 
 
@@ -72,7 +79,7 @@ def allocate_budget_bisection(
     low_lambda = 0.0
     high_lambda = float(np.max(potentials) * alpha / beta) + 1e-9
 
-    for _ in range(100):
+    for _ in range(BISection_MAX_ITER):
         mid_lambda = (low_lambda + high_lambda) / 2.0
         
         # S_i = P_i * alpha / lambda - beta
