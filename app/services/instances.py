@@ -10,6 +10,7 @@ from app.services.prediction_service import PredictionService
 from app.services.spatial_service import SpatialService
 from app.services.optimization_service import OptimizationService
 from app.services.xai_service import XAIService
+from app.services.assistant_service import AssistantService
 
 # Singleton instances
 db = DBService()
@@ -17,3 +18,5 @@ prediction = PredictionService(db)
 spatial = SpatialService(db)
 optimization = OptimizationService(db)
 xai = XAIService()
+assistant = AssistantService()
+

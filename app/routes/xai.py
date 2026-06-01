@@ -1,34 +1,92 @@
 """
-DataStorm 2026 - XAI & Reports Routes
-=====================================
-Controller routes for Explainable AI (SHAP global values) and validation reports.
-Reads validation_report.csv and renders chronological holdout comparison tables.
+DataStorm 2026 - AI Data Assistant & Reports Routes
+===================================================
+Controller routes for the local AI Chatbot (AI Data Assistant) and validation reports.
+Supports document queries, programmatic statistics, file uploads, and Ollama integration.
 """
 
 import csv
 import json
 from pathlib import Path
+from flask import Blueprint, render_template, abort, request, jsonify, current_app
+from werkzeug.utils import secure_filename
 
-from flask import Blueprint, render_template, abort
-from app.services.instances import xai
+from app.services.instances import xai, assistant
 
 ROOT = Path(__file__).resolve().parents[2]
+UPLOAD_FOLDER = ROOT / "uploads"
+UPLOAD_FOLDER.mkdir(parents=True, exist_ok=True)
 
 xai_bp = Blueprint("xai", __name__)
 
+
 @xai_bp.route("/xai")
 def view_xai():
-    """Render global SHAP explainability summaries."""
-    importance = xai.get_global_importance()
-    top_importance = importance[:15]
-    explanation_type = xai.get_explanation_type()
-
+    """Render the AI Data Assistant Chat interface (replacing the old XAI dashboard)."""
     return render_template(
         "xai.html",
-        active_page="xai",
-        importance=top_importance,
-        explanation_type=explanation_type,
+        active_page="xai"
     )
+
+
+@xai_bp.route("/xai/upload", methods=["POST"])
+def upload_file():
+    """API endpoint to upload CSV, Excel, or PDF files for domain chatbot retrieval."""
+    if "file" not in request.files:
+        return jsonify({"error": "No file part in the request."}), 400
+    
+    file = request.files["file"]
+    if file.filename == "":
+        return jsonify({"error": "No selected file."}), 400
+
+    filename = secure_filename(file.filename)
+    filepath = UPLOAD_FOLDER / filename
+    
+    try:
+        file.save(filepath)
+        # Process and ingest in assistant service
+        status_msg = assistant.ingest_uploaded_file(filepath)
+        return jsonify({"message": status_msg})
+    except Exception as e:
+        return jsonify({"error": f"Failed to upload and ingest file: {str(e)}"}), 500
+
+
+@xai_bp.route("/xai/chat", methods=["POST"])
+def chat():
+    """API endpoint to receive messages, apply guardrails, perform RAG, and query the local LLM."""
+    data = request.get_json() or {}
+    message = data.get("message", "").strip()
+    history = data.get("history", [])
+
+    if not message:
+        return jsonify({"error": "Empty message."}), 400
+
+    # 1. Apply strict domain guardrails
+    if not assistant.is_query_domain_restricted(message):
+        return jsonify({
+            "response": "I can only answer questions related to the uploaded datasets, predictions, analytics, and project documentation.",
+            "tokens": {"input": 0, "output": 0, "total": 0}
+        })
+
+    # 2. Run Analytics Engine to programmatically calculate statistics (mean, correlation, etc.)
+    analytics_info = assistant.run_statistics_engine(message)
+
+    # 3. Retrieve relevant context chunks (FAISS or TF-IDF fallback)
+    retrieved_context = assistant.retrieve_context(message)
+
+    # 4. Generate LLM response using local model (Ollama)
+    response_text, tokens = assistant.generate_chat_response(
+        query=message,
+        context=retrieved_context,
+        analytics_info=analytics_info,
+        history=history
+    )
+
+    return jsonify({
+        "response": response_text,
+        "tokens": tokens
+    })
+
 
 @xai_bp.route("/reports")
 def view_reports():

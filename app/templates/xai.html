@@ -5,94 +5,386 @@
     <!-- Header -->
     <div class="d-flex justify-content-between align-items-center mb-4">
         <div>
-            <h1 class="page-title">Explainable AI (XAI) Model</h1>
-            <p class="page-subtitle">Drivers behind the <strong>primary latent heuristic</strong> (exact multiplicative decomposition{% if explanation_type == 'heuristic_waterfall' %} — not simulated SHAP{% endif %}).</p>
+            <h1 class="page-title">AI Data Assistant</h1>
+            <p class="page-subtitle">Interact with the <strong>DataStorm FMCG Analyst</strong> to query datasets, calculate stats, explain predictions, and analyze files.</p>
         </div>
-        <div class="d-flex gap-2">
-            <span class="badge-glass badge-blue"><i class="fa-solid fa-brain me-1"></i> {{ explanation_type | replace('_', ' ') | title }}</span>
+        <div class="d-flex gap-2 align-items-center">
+            <span class="badge-glass badge-blue"><i class="fa-solid fa-robot me-1"></i> DataStorm AI Analyst</span>
+            <span class="badge-glass badge-green" id="local-status"><i class="fa-solid fa-circle-check me-1"></i> Local Offline Mode</span>
+            <span class="badge-glass badge-orange d-inline-flex align-items-center" id="session-token-badge" style="color: #F59E0B; background: rgba(245, 158, 11, 0.1); border: 1px solid rgba(245, 158, 11, 0.2);">
+                <svg width="12" height="12" viewBox="0 0 16 16" style="transform: rotate(-90deg); border-radius: 50%; background: rgba(255,255,255,0.1); flex-shrink: 0; margin-right: 6px;">
+                    <circle r="6" cx="8" cy="8" fill="transparent" 
+                            stroke="#F59E0B" 
+                            stroke-width="12" 
+                            stroke-dasharray="0 37.7" id="session-token-circle" />
+                </svg>
+                <span id="session-token-text">Session: 0 Tokens</span>
+            </span>
         </div>
     </div>
 
-    <!-- Main Chart Row -->
-    <div class="row g-4 mb-4">
-        <!-- Plotly Global Feature Importance -->
+    <!-- Main Workspace -->
+    <div class="row g-4">
+        <!-- Chat Interface Panel -->
         <div class="col-lg-8">
-            <div class="command-panel p-4 h-100">
-                <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">Global Feature Importance: Mean |SHAP Value| (Predictive Impact)</h3>
-                <div id="global-shap-chart" style="height: 480px; width: 100%;"></div>
+            <div class="command-panel p-4 d-flex flex-column" style="height: 620px;">
+                <!-- Chat History Window -->
+                <div class="chat-history-container flex-grow-1 overflow-auto mb-3 pe-2" id="chat-history" style="scroll-behavior: smooth;">
+                    <!-- Welcome Message -->
+                    <div class="chat-message assistant mb-4">
+                        <div class="d-flex gap-3">
+                            <div class="chat-avatar"><i class="fa-solid fa-robot"></i></div>
+                            <div class="chat-bubble-wrapper">
+                                <div class="chat-bubble">
+                                    Hello! I am the **DataStorm AI Data Assistant**. 
+                                    I am restricted to answering questions about our FMCG datasets, model predictions, validation performance, spatial catchment indexes, and any local CSV/Excel files you upload.
+                                    
+                                    How can I help you optimize latent demand today?
+                                </div>
+                                <div class="chat-meta mt-1">
+                                    <span class="chat-timestamp">System</span>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+
+                <!-- Input Zone -->
+                <div class="chat-input-wrapper">
+                    <form id="chat-form" class="d-flex gap-2">
+                        <input type="text" id="user-input" class="form-control chat-input-field" placeholder="Ask a question (e.g. 'What is the average sales volume in the predictions dataset?')..." required autocomplete="off">
+                        <button type="submit" class="btn-glass btn-blue px-4"><i class="fa-solid fa-paper-plane me-1"></i> Send</button>
+                    </form>
+                </div>
             </div>
         </div>
-        
-        <!-- Explainer Card -->
+
+        <!-- Ingestion & Uploads Panel -->
         <div class="col-lg-4">
-            <div class="command-panel p-4 h-100 d-flex flex-column justify-content-between">
-                <div>
-                    <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;">What are SHAP values?</h3>
-                    <p class="small text-muted" style="line-height: 1.6;">
-                        SHAP (SHapley Additive exPlanations) is a game-theoretic approach to explain the outputs of any machine learning model. It connects optimal allocation of credit with local explanations using classical Shapley values.
-                    </p>
-                    <p class="small text-muted" style="line-height: 1.6;">
-                        Each feature value acts as a "player" in a game where the prediction is the payout. SHAP values distribute the payout among the features fairly, according to their marginal contributions.
-                    </p>
-                    <hr style="border-top: 1px solid var(--border-glass);">
-                    <h4 class="h6 font-weight-bold mb-2" style="color: var(--text-primary);">How to read local waterfall charts:</h4>
-                    <ul class="small text-muted ps-3 mb-0" style="line-height: 1.6;">
-                        <li><strong class="text-success">Green values</strong> push the prediction upward (indicating high potential gaps, good catchments, or size factors).</li>
-                        <li><strong class="text-danger">Red values</strong> drag the prediction downward (indicating supply caps, low growth, or high local competition).</li>
-                        <li>The chart starts at the <strong>Base Value</strong> (average log prediction) and sums the steps to reach the final <strong>Prediction Log</strong>.</li>
-                    </ul>
+            <div class="row g-4 h-100 flex-column">
+                <!-- Upload Card -->
+                <div class="col-12">
+                    <div class="command-panel p-4">
+                        <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;"><i class="fa-solid fa-file-arrow-up me-2 text-primary"></i> Upload Custom Dataset</h3>
+                        <p class="small text-muted mb-3">Upload custom CSV, Excel, or PDF reports. They will be parsed, indexed, and made queryable locally.</p>
+                        
+                        <div class="upload-dropzone p-4 text-center mb-3" id="dropzone" style="border: 2px dashed var(--border-glass); border-radius: 8px; cursor: pointer; transition: background 0.2s;">
+                            <i class="fa-solid fa-cloud-arrow-up fa-2x mb-2 text-primary"></i>
+                            <div class="small font-weight-bold">Drag & drop files here</div>
+                            <div class="text-muted" style="font-size: 0.75rem;">Supports CSV, XLSX, XLS, PDF</div>
+                            <input type="file" id="file-input" class="d-none">
+                        </div>
+
+                        <div id="upload-status" class="small mt-2 alert alert-info py-2 d-none"></div>
+                    </div>
                 </div>
-                <div class="mt-4">
-                    <a href="{{ url_for('outlets.view_outlets') }}" class="btn-glass btn-blue w-100 justify-content-center py-2">
-                        <i class="fa-solid fa-search me-1"></i> Audit Outlet Profiles
-                    </a>
+
+                <!-- Capabilities Card -->
+                <div class="col-12 flex-grow-1">
+                    <div class="command-panel p-4 d-flex flex-column justify-content-between h-100">
+                        <div>
+                            <h3 class="h6 mb-3 font-weight-bold" style="font-family: var(--font-outfit); font-weight: 600;"><i class="fa-solid fa-chart-pie me-2 text-primary"></i> Analytical Commands</h3>
+                            <p class="small text-muted mb-2">My parser will programmatically execute analytics calculations on active datasets if requested. Try asking:</p>
+                            
+                            <ul class="small ps-3 text-muted" style="line-height: 1.8;">
+                                <li><code>Calculate summary stats / mean / median</code></li>
+                                <li><code>Show correlation between columns</code></li>
+                                <li><code>Detect missing values or outliers</code></li>
+                                <li><code>Explain predictions for Outlet OUT_50</code></li>
+                            </ul>
+                            
+                            <hr style="border-top: 1px solid var(--border-glass);">
+                            <h4 class="h6 font-weight-bold mb-2" style="color: var(--text-primary);">Security & Guardrails:</h4>
+                            <p class="small text-muted" style="line-height: 1.5;">
+                                This assistant runs fully offline locally. General knowledge queries (e.g. general history, science, pop culture) will be rejected to prevent hallucinations and maintain strict domain bounds.
+                            </p>
+                        </div>
+                    </div>
                 </div>
             </div>
         </div>
     </div>
 </div>
 
+<style>
+    /* Chat Styling */
+    .chat-history-container {
+        display: flex;
+        flex-direction: column;
+        gap: 1.5rem;
+    }
+    .chat-avatar {
+        width: 38px;
+        height: 38px;
+        border-radius: 50%;
+        background: rgba(37, 99, 235, 0.15);
+        border: 1px solid var(--border-glass);
+        color: var(--primary-color, #2563EB);
+        display: flex;
+        align-items: center;
+        justify-content: center;
+        flex-shrink: 0;
+        font-size: 1.1rem;
+    }
+    .chat-message.user .chat-avatar {
+        background: rgba(6, 182, 212, 0.15);
+        color: #06B6D4;
+    }
+    .chat-bubble-wrapper {
+        max-width: 80%;
+    }
+    .chat-bubble {
+        background: rgba(255, 255, 255, 0.04);
+        border: 1px solid var(--border-glass);
+        border-radius: 8px;
+        padding: 12px 16px;
+        color: var(--text-primary);
+        font-size: 0.95rem;
+        line-height: 1.5;
+        white-space: pre-wrap;
+    }
+    .chat-message.user .chat-bubble {
+        background: linear-gradient(135deg, rgba(37, 99, 235, 0.1) 0%, rgba(6, 182, 212, 0.1) 100%);
+        border: 1px solid rgba(37, 99, 235, 0.2);
+    }
+    .chat-meta {
+        font-size: 0.75rem;
+        color: var(--text-muted);
+        display: flex;
+        gap: 8px;
+        align-items: center;
+    }
+    .chat-token-badge {
+        background: rgba(255, 255, 255, 0.05);
+        padding: 1px 6px;
+        border-radius: 4px;
+        border: 1px solid var(--border-glass);
+        font-size: 0.7rem;
+    }
+    .chat-input-field {
+        background: rgba(255, 255, 255, 0.03) !important;
+        border: 1px solid var(--border-glass) !important;
+        color: var(--text-primary) !important;
+        border-radius: 6px;
+        padding: 12px;
+    }
+    .chat-input-field:focus {
+        border-color: rgba(37, 99, 235, 0.5) !important;
+        box-shadow: none !important;
+    }
+    .upload-dropzone:hover {
+        background: rgba(37, 99, 235, 0.05);
+        border-color: rgba(37, 99, 235, 0.4) !important;
+    }
+</style>
+{% endblock %}
+
+{% block scripts %}
 <script>
-    document.addEventListener("DOMContentLoaded", function() {
-        const rootStyle = getComputedStyle(document.documentElement);
-        const chartTheme = {
-            primary: rootStyle.getPropertyValue('--chart-series-1').trim() || '#2563EB',
-            secondary: rootStyle.getPropertyValue('--chart-series-2').trim() || '#06B6D4',
-            grid: rootStyle.getPropertyValue('--chart-grid').trim() || '#E9F2FF',
-            text: rootStyle.getPropertyValue('--text-secondary').trim() || '#334155',
-            muted: rootStyle.getPropertyValue('--text-muted').trim() || '#64748B',
-        };
+document.addEventListener("DOMContentLoaded", function() {
+    const chatForm = document.getElementById("chat-form");
+    const userInput = document.getElementById("user-input");
+    const chatHistory = document.getElementById("chat-history");
+    const dropzone = document.getElementById("dropzone");
+    const fileInput = document.getElementById("file-input");
+    const uploadStatus = document.getElementById("upload-status");
 
-        const rawImportance = {{ importance | tojson }};
-        const sorted = [...rawImportance].reverse();
+    let history = [];
+    let cumulativeTokens = 0;
 
-        const labels = sorted.map(item => item.feature
-            .replace(/_gaussian_score/g, '')
-            .replace(/_/g, ' ')
-            .replace(/\b\w/g, c => c.toUpperCase()));
-        const values = sorted.map(item => item.mean_abs_shap);
+    // Update cumulative session tracker
+    function updateSessionTokenTracker() {
+        const textEl = document.getElementById("session-token-text");
+        const circleEl = document.getElementById("session-token-circle");
+        if (!textEl || !circleEl) return;
+        
+        textEl.textContent = `Session: ${cumulativeTokens} Tokens`;
+        
+        const maxSessionContext = 32768; // 32k tokens context max
+        const pct = Math.min((cumulativeTokens / maxSessionContext) * 100, 100);
+        
+        // Circumference for r=6 is 37.7
+        const circ = 37.7;
+        const dash = (pct * circ / 100).toFixed(2);
+        circleEl.setAttribute("stroke-dasharray", `${dash} ${circ}`);
+    }
 
-        Plotly.newPlot('global-shap-chart', [{
-            y: labels,
-            x: values,
-            type: 'bar',
-            orientation: 'h',
-            marker: {
-                color: 'rgba(37, 99, 235, 0.75)',
-                line: { color: chartTheme.primary, width: 1 },
-            },
-        }], {
-            paper_bgcolor: 'rgba(0,0,0,0)',
-            plot_bgcolor: 'rgba(0,0,0,0)',
-            font: { color: chartTheme.text, family: 'Inter, sans-serif', size: 11 },
-            margin: { l: 180, r: 16, t: 12, b: 40 },
-            xaxis: {
-                gridcolor: chartTheme.grid,
-                title: { text: 'Mean Absolute SHAP Value (Log Scale)', font: { color: chartTheme.muted, size: 11 } },
-                tickfont: { color: chartTheme.muted },
-            },
-            yaxis: { tickfont: { color: chartTheme.text } },
-        }, { displayModeBar: false, responsive: true });
+    // Helper to format text/markdown
+    function formatMarkdown(text) {
+        // Very basic markdown formatting for display
+        return text
+            .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
+            .replace(/\*(.*?)\*/g, '<em>$1</em>')
+            .replace(/`(.*?)`/g, '<code class="bg-dark px-1 py-0.5 rounded text-light">$1</code>')
+            .replace(/\n- (.*?)/g, '<br>• $1')
+            .replace(/### (.*?)\n/g, '<h5 class="text-primary font-weight-bold mt-2">$1</h5>');
+    }
+
+    // Scroll to bottom helper
+    function scrollToBottom() {
+        chatHistory.scrollTop = chatHistory.scrollHeight;
+    }
+
+    // Append Message to History UI
+    function appendMessage(sender, text, tokens = null) {
+        const isUser = sender === "user";
+        const avatarIcon = isUser ? "fa-user" : "fa-robot";
+        
+        const messageDiv = document.createElement("div");
+        messageDiv.className = `chat-message ${sender} mb-4`;
+        
+        let tokenHtml = "";
+        if (tokens && tokens.total > 0) {
+            // Draw a small pie chart of input (blue) vs output (cyan)
+            const total = tokens.total;
+            const inputPct = (tokens.input / total) * 100;
+            // Circumference for r=6 is 37.7
+            const circ = 37.7;
+            const strokeDash = `${(inputPct * circ / 100).toFixed(2)} ${circ}`;
+            
+            tokenHtml = `
+                <span class="chat-token-badge d-inline-flex align-items-center gap-1.5" style="padding: 3px 8px; border-radius: 6px;">
+                    <svg width="12" height="12" viewBox="0 0 16 16" style="transform: rotate(-90deg); border-radius: 50%; background: #06B6D4; flex-shrink: 0;">
+                        <circle r="6" cx="8" cy="8" fill="transparent" 
+                                stroke="#2563EB" 
+                                stroke-width="12" 
+                                stroke-dasharray="${strokeDash}" />
+                    </svg>
+                    <span>Tokens: In ${tokens.input} | Out ${tokens.output} | Total ${tokens.total}</span>
+                </span>
+            `;
+            
+            // Add to session total
+            cumulativeTokens += tokens.total;
+            updateSessionTokenTracker();
+        }
+
+        const timestampStr = new Date().toLocaleTimeString('en-GB', { hour12: false });
+
+        messageDiv.innerHTML = `
+            <div class="d-flex gap-3 ${isUser ? 'flex-row-reverse' : ''}">
+                <div class="chat-avatar"><i class="fa-solid ${avatarIcon}"></i></div>
+                <div class="chat-bubble-wrapper">
+                    <div class="chat-bubble">${formatMarkdown(text)}</div>
+                    <div class="chat-meta mt-1 ${isUser ? 'justify-content-end' : ''}">
+                        <span class="chat-timestamp">${isUser ? 'You' : 'DataStorm Analyst'} (${timestampStr})</span>
+                        ${tokenHtml}
+                    </div>
+                </div>
+            </div>
+        `;
+        
+        chatHistory.appendChild(messageDiv);
+        scrollToBottom();
+    }
+
+    // Handle Chat Form Submit
+    chatForm.addEventListener("submit", async function(e) {
+        e.preventDefault();
+        const text = userInput.value.strip ? userInput.value.strip() : userInput.value.trim();
+        if (!text) return;
+
+        // User bubble
+        appendMessage("user", text);
+        userInput.value = "";
+        
+        // Typing indicator
+        const typingDiv = document.createElement("div");
+        typingDiv.className = "chat-message assistant mb-4";
+        typingDiv.id = "typing-indicator";
+        typingDiv.innerHTML = `
+            <div class="d-flex gap-3">
+                <div class="chat-avatar"><i class="fa-solid fa-robot"></i></div>
+                <div class="chat-bubble-wrapper">
+                    <div class="chat-bubble"><i class="fa-solid fa-ellipsis fa-fade"></i> Calculating...</div>
+                </div>
+            </div>
+        `;
+        chatHistory.appendChild(typingDiv);
+        scrollToBottom();
+
+        try {
+            const res = await fetch("/xai/chat", {
+                method: "POST",
+                headers: { "Content-Type": "application/json" },
+                body: JSON.stringify({ message: text, history: history })
+            });
+            const data = await res.json();
+            
+            // Remove typing indicator
+            const el = document.getElementById("typing-indicator");
+            if (el) el.remove();
+
+            if (data.error) {
+                appendMessage("assistant", `Error: ${data.error}`);
+            } else {
+                appendMessage("assistant", data.response, data.tokens);
+                history.push({ role: "user", content: text });
+                history.push({ role: "assistant", content: data.response });
+            }
+        } catch (error) {
+            const el = document.getElementById("typing-indicator");
+            if (el) el.remove();
+            appendMessage("assistant", "Unable to communicate with local chatbot server.");
+        }
     });
+
+    // File Upload Handlers
+    dropzone.addEventListener("click", () => fileInput.click());
+    
+    dropzone.addEventListener("dragover", (e) => {
+        e.preventDefault();
+        dropzone.style.background = "rgba(37, 99, 235, 0.08)";
+    });
+
+    dropzone.addEventListener("dragleave", () => {
+        dropzone.style.background = "none";
+    });
+
+    dropzone.addEventListener("drop", (e) => {
+        e.preventDefault();
+        dropzone.style.background = "none";
+        if (e.dataTransfer.files.length > 0) {
+            uploadFile(e.dataTransfer.files[0]);
+        }
+    });
+
+    fileInput.addEventListener("change", () => {
+        if (fileInput.files.length > 0) {
+            uploadFile(fileInput.files[0]);
+        }
+    });
+
+    async function uploadFile(file) {
+        uploadStatus.className = "small mt-2 alert alert-info py-2";
+        uploadStatus.innerHTML = `<i class="fa-solid fa-spinner fa-spin me-1"></i> Uploading and indexing '${file.name}'...`;
+        uploadStatus.classList.remove("d-none");
+
+        const formData = new FormData();
+        formData.append("file", file);
+
+        try {
+            const res = await fetch("/xai/upload", {
+                method: "POST",
+                body: formData
+            });
+            const data = await res.json();
+            
+            if (data.error) {
+                uploadStatus.className = "small mt-2 alert alert-danger py-2";
+                uploadStatus.innerHTML = `<i class="fa-solid fa-circle-exclamation me-1"></i> ${data.error}`;
+            } else {
+                uploadStatus.className = "small mt-2 alert alert-success py-2";
+                uploadStatus.innerHTML = `<i class="fa-solid fa-check me-1"></i> ${data.message}`;
+                
+                // Print system notification in chat history
+                appendMessage("assistant", `System: Uploaded file '${file.name}' successfully. You can now ask questions or run statistics on its columns.`);
+            }
+        } catch (error) {
+            uploadStatus.className = "small mt-2 alert alert-danger py-2";
+            uploadStatus.innerHTML = `<i class="fa-solid fa-circle-exclamation me-1"></i> File upload server error.`;
+        }
+    }
+});
 </script>
 {% endblock %}
