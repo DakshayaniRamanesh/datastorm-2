@@ -209,10 +209,63 @@ document.addEventListener("DOMContentLoaded", function() {
         circleEl.setAttribute("stroke-dasharray", `${dash} ${circ}`);
     }
 
+    // Parse markdown tables to styled HTML tables
+    function renderHtmlTable(lines) {
+        if (lines.length < 2) return lines.join('\n');
+        
+        let html = '<div class="table-responsive"><table class="table table-sm table-striped table-bordered text-light mt-2" style="background: rgba(0,0,0,0.2); border-color: rgba(255,255,255,0.1); font-size: 0.85rem; margin-bottom: 0;">';
+        
+        // Parse header
+        const headers = lines[0].split('|').slice(1, -1).map(h => h.trim());
+        html += '<thead style="background: rgba(255,255,255,0.05);"><tr>';
+        headers.forEach(h => html += `<th>${h}</th>`);
+        html += '</tr></thead><tbody>';
+
+        // Skip separator row (index 1) and render body rows
+        for (let idx = 2; idx < lines.length; idx++) {
+            const cols = lines[idx].split('|').slice(1, -1).map(c => c.trim());
+            html += '<tr>';
+            cols.forEach(c => html += `<td>${c}</td>`);
+            html += '</tr>';
+        }
+
+        html += '</tbody></table></div>';
+        return html;
+    }
+
+    function parseMarkdownTables(text) {
+        const lines = text.split('\n');
+        let inTable = false;
+        let tableLines = [];
+        let output = [];
+
+        for (let i = 0; i < lines.length; i++) {
+            const line = lines[i].trim();
+            if (line.startsWith('|') && line.endsWith('|')) {
+                inTable = true;
+                tableLines.push(line);
+            } else {
+                if (inTable) {
+                    output.push(renderHtmlTable(tableLines));
+                    tableLines = [];
+                    inTable = false;
+                }
+                output.push(lines[i]);
+            }
+        }
+        if (inTable) {
+            output.push(renderHtmlTable(tableLines));
+        }
+        return output.join('\n');
+    }
+
     // Helper to format text/markdown
     function formatMarkdown(text) {
-        // Very basic markdown formatting for display
-        return text
+        // Parse markdown tables first
+        let parsed = parseMarkdownTables(text);
+        
+        // Basic markdown formatting for display
+        return parsed
             .replace(/\*\*(.*?)\*\*/g, '<strong>$1</strong>')
             .replace(/\*(.*?)\*/g, '<em>$1</em>')
             .replace(/`(.*?)`/g, '<code class="bg-dark px-1 py-0.5 rounded text-light">$1</code>')
@@ -259,13 +312,36 @@ document.addEventListener("DOMContentLoaded", function() {
             updateSessionTokenTracker();
         }
 
+        // Check for CHART tag
+        let chartData = null;
+        const chartRegex = /\[CHART:\s*({.*?})\]/s;
+        const match = text.match(chartRegex);
+        if (match) {
+            try {
+                chartData = JSON.parse(match[1]);
+                // Strip the chart tag from the displayed text
+                text = text.replace(chartRegex, '');
+            } catch (e) {
+                console.error("Failed to parse chart JSON:", e);
+            }
+        }
+
+        const chartId = "chart-" + Math.random().toString(36).substr(2, 9);
+        let chartHtml = "";
+        if (chartData) {
+            chartHtml = `<div class="chat-chart-container mt-3 p-2 bg-dark-glass rounded" id="${chartId}" style="height: 250px; width: 100%; border: 1px solid rgba(255,255,255,0.08);"></div>`;
+        }
+
         const timestampStr = new Date().toLocaleTimeString('en-GB', { hour12: false });
 
         messageDiv.innerHTML = `
             <div class="d-flex gap-3 ${isUser ? 'flex-row-reverse' : ''}">
                 <div class="chat-avatar"><i class="fa-solid ${avatarIcon}"></i></div>
-                <div class="chat-bubble-wrapper">
-                    <div class="chat-bubble">${formatMarkdown(text)}</div>
+                <div class="chat-bubble-wrapper" style="width: 85%;">
+                    <div class="chat-bubble">
+                        <div>${formatMarkdown(text)}</div>
+                        ${chartHtml}
+                    </div>
                     <div class="chat-meta mt-1 ${isUser ? 'justify-content-end' : ''}">
                         <span class="chat-timestamp">${isUser ? 'You' : 'DataStorm Analyst'} (${timestampStr})</span>
                         ${tokenHtml}
@@ -276,6 +352,67 @@ document.addEventListener("DOMContentLoaded", function() {
         
         chatHistory.appendChild(messageDiv);
         scrollToBottom();
+
+        // Render chart if present
+        if (chartData) {
+            setTimeout(() => {
+                const el = document.getElementById(chartId);
+                if (!el) return;
+                
+                const rootStyle = getComputedStyle(document.documentElement);
+                const textTheme = rootStyle.getPropertyValue('--text-primary').trim() || '#f8fafc';
+                const gridTheme = 'rgba(255, 255, 255, 0.05)';
+                
+                let data = [];
+                let layout = {
+                    paper_bgcolor: 'rgba(0,0,0,0)',
+                    plot_bgcolor: 'rgba(0,0,0,0)',
+                    font: { color: textTheme, family: 'Inter, sans-serif', size: 9 },
+                    margin: { l: 45, r: 15, t: 35, b: 35 },
+                    title: { text: chartData.title, font: { color: textTheme, size: 10, weight: 'bold' } },
+                    xaxis: { gridcolor: gridTheme, tickfont: { color: 'rgba(255,255,255,0.6)' } },
+                    yaxis: { gridcolor: gridTheme, tickfont: { color: 'rgba(255,255,255,0.6)' } }
+                };
+
+                if (chartData.type === "heatmap") {
+                    data.push({
+                        x: chartData.x,
+                        y: chartData.y,
+                        z: chartData.z,
+                        type: 'heatmap',
+                        colorscale: 'Viridis',
+                        showscale: true
+                    });
+                } else if (chartData.type === "bar") {
+                    if (chartData.y2) {
+                        data.push({
+                            x: chartData.x,
+                            y: chartData.y,
+                            name: chartData.labels[0],
+                            type: 'bar',
+                            marker: { color: 'rgba(37, 99, 235, 0.8)' }
+                        });
+                        data.push({
+                            x: chartData.x,
+                            y: chartData.y2,
+                            name: chartData.labels[1],
+                            type: 'bar',
+                            marker: { color: 'rgba(6, 182, 212, 0.8)' }
+                        });
+                        layout.barmode = 'group';
+                    } else {
+                        data.push({
+                            x: chartData.x,
+                            y: chartData.y,
+                            type: 'bar',
+                            marker: { color: 'rgba(37, 99, 235, 0.8)' }
+                        });
+                    }
+                }
+                
+                Plotly.newPlot(chartId, data, layout, { displayModeBar: false, responsive: true });
+            }, 50);
+        }
     }
 
     // Handle Chat Form Submit

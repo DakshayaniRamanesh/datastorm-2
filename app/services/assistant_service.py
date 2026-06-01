@@ -425,10 +425,14 @@ class AssistantService:
             summary_parts.append("\n**Statistical Summary Metrics**:")
             cols_to_use = numeric_cols if numeric_cols else [c for c in target_df.columns if pd.api.types.is_numeric_dtype(target_df[c])][:5]
             
+            means = []
+            medians = []
             for col in cols_to_use:
-                col_mean = target_df[col].mean()
-                col_median = target_df[col].median()
-                col_std = target_df[col].std()
+                col_mean = float(target_df[col].mean())
+                col_median = float(target_df[col].median())
+                col_std = float(target_df[col].std())
+                means.append(col_mean)
+                medians.append(col_median)
                 try:
                     col_mode = target_df[col].mode().iloc[0]
                 except Exception:
@@ -439,6 +443,17 @@ class AssistantService:
                 summary_parts.append(f"  - Median: {col_median:.4f}")
                 summary_parts.append(f"  - Mode: {col_mode}")
                 summary_parts.append(f"  - Standard Deviation: {col_std:.4f}")
+            
+            # Add Bar Chart
+            chart_json = {
+                "type": "bar",
+                "title": "Mean vs Median Metrics Comparison",
+                "x": cols_to_use,
+                "y": means,
+                "y2": medians,
+                "labels": ["Mean", "Median"]
+            }
+            summary_parts.append(f"\n[CHART: {json.dumps(chart_json)}]\n")
 
         # Correlation / Covariance
         if "correlation" in q or "covariance" in q or "corr" in q:
@@ -449,6 +464,16 @@ class AssistantService:
                 corr_matrix = target_df[cols_to_use].corr()
                 summary_parts.append(f"```\n{corr_matrix.round(4).to_string()}\n```")
                 
+                # Add Heatmap Chart
+                corr_json = {
+                    "type": "heatmap",
+                    "title": f"Pearson Correlation Matrix: {source_name}",
+                    "x": cols_to_use,
+                    "y": cols_to_use,
+                    "z": corr_matrix.values.tolist()
+                }
+                summary_parts.append(f"\n[CHART: {json.dumps(corr_json)}]\n")
+
                 if "covariance" in q:
                     summary_parts.append("\n**Covariance Matrix**:")
                     cov_matrix = target_df[cols_to_use].cov()
@@ -461,6 +486,7 @@ class AssistantService:
             triggered = True
             summary_parts.append("\n**Outlier and Anomaly Detection (IQR Method)**:")
             cols_to_use = numeric_cols if numeric_cols else [c for c in target_df.columns if pd.api.types.is_numeric_dtype(target_df[c])][:3]
+            outlier_counts = []
             for col in cols_to_use:
                 Q1 = target_df[col].quantile(0.25)
                 Q3 = target_df[col].quantile(0.75)
@@ -468,7 +494,17 @@ class AssistantService:
                 lower_bound = Q1 - 1.5 * IQR
                 upper_bound = Q3 + 1.5 * IQR
                 outliers = target_df[(target_df[col] < lower_bound) | (target_df[col] > upper_bound)]
+                outlier_counts.append(len(outliers))
                 summary_parts.append(f"- **`{col}`**: found {len(outliers):,} outliers ({len(outliers)/len(target_df)*100:.2f}%) outside bounds [{lower_bound:.2f}, {upper_bound:.2f}]")
+            
+            # Add Bar Chart
+            chart_json = {
+                "type": "bar",
+                "title": "Detected Outlier Counts",
+                "x": cols_to_use,
+                "y": outlier_counts
+            }
+            summary_parts.append(f"\n[CHART: {json.dumps(chart_json)}]\n")
 
         if triggered:
             return "\n".join(summary_parts)
