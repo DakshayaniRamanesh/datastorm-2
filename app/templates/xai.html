@@ -314,7 +314,7 @@ document.addEventListener("DOMContentLoaded", function() {
 
         // Check for CHART tag
         let chartData = null;
-        const chartRegex = /\[CHART:\s*({.*?})\]/s;
+        const chartRegex = /\[CHART:\s*([\s\S]*?)\]/;
         const match = text.match(chartRegex);
         if (match) {
             try {
