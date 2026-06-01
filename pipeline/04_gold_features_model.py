@@ -240,6 +240,11 @@ def build_training_records(
         if not poi_df.empty:
             feats = feats.merge(poi_df, on="Outlet_ID", how="left")
             
+        # Compute spatial interaction feature
+        cc = feats.get("combined_catchment_score", pd.Series(0.0, index=feats.index))
+        cd = feats.get("competitor_density_gaussian", pd.Series(0.0, index=feats.index))
+        feats["catchment_to_competitor_ratio"] = (cc / (cd + 1e-9)).fillna(0.0).clip(0.0, 10.0)
+            
         # Target variable (expm1 is used downstream, target is logged sales)
         actual = (
             monthly[(monthly["Year"] == yr) & (monthly["Month"] == mo)]
@@ -430,6 +435,12 @@ def main():
 
     # Block 1: legacy weighted poi_* score + blend with Gaussian/gravity catchment
     gold_feats = enrich_catchment_features(gold_feats)
+    
+    # Compute spatial interaction feature
+    cc = gold_feats.get("combined_catchment_score", pd.Series(0.0, index=gold_feats.index))
+    cd = gold_feats.get("competitor_density_gaussian", pd.Series(0.0, index=gold_feats.index))
+    gold_feats["catchment_to_competitor_ratio"] = (cc / (cd + 1e-9)).fillna(0.0).clip(0.0, 10.0)
+    
     logger.info(
         "Catchment scores — poi median=%.4f p95=%.4f | combined median=%.4f | effective median=%.4f",
         gold_feats["poi_catchment_score"].median(),
@@ -524,6 +535,10 @@ def main():
         "holiday_poya_count", "holiday_high_effect_count", "holiday_weighted_score",
         "holiday_total_count",
         "jan_holiday_poya_count", "jan_holiday_high_effect_count", "jan_holiday_weighted_score",
+        # Advanced Features
+        "vol_max_to_median_ratio", "vol_p90_to_median_ratio", "vol_mean_to_median_ratio",
+        "censoring_to_cv_ratio", "cooler_per_volume", "group_mean_vol", "group_max_vol", "group_cv",
+        "catchment_to_competitor_ratio",
     ]
     
     # Verify presence in dataframes

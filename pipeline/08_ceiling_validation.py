@@ -119,6 +119,11 @@ def build_val_panel(monthly, outlet, season, poi_df, train_periods, val_periods)
         if not poi_df.empty:
             feats = feats.merge(poi_df, on="Outlet_ID", how="left")
 
+        # Compute spatial interaction feature
+        cc = feats.get("combined_catchment_score", pd.Series(0.0, index=feats.index))
+        cd = feats.get("competitor_density_gaussian", pd.Series(0.0, index=feats.index))
+        feats["catchment_to_competitor_ratio"] = (cc / (cd + 1e-9)).fillna(0.0).clip(0.0, 10.0)
+
         hist_for_peer = build_outlet_features(train_window, target_month=mo)
         hist_for_peer = hist_for_peer.merge(outlet[["Outlet_ID", "Outlet_Type", "Outlet_Size"]], on="Outlet_ID", how="left")
         peer_tbl = (
@@ -227,6 +232,10 @@ def walkforward_ceiling_validation() -> pd.DataFrame:
         "target_season_factor", "target_month", "Cooler_Count",
         "combined_catchment_score", "competitor_density_gaussian", "competition_dampener",
         "peer_efficiency_gap", "size_factor", "type_factor",
+        # Advanced Features
+        "vol_max_to_median_ratio", "vol_p90_to_median_ratio", "vol_mean_to_median_ratio",
+        "censoring_to_cv_ratio", "cooler_per_volume", "group_mean_vol", "group_max_vol", "group_cv",
+        "catchment_to_competitor_ratio",
     ]
 
     tss = TimeSeriesSplit(n_splits=N_SPLITS)
@@ -274,6 +283,12 @@ def walkforward_ceiling_validation() -> pd.DataFrame:
             f["type_factor"] = f["Outlet_Type"].map(TYPE_POTENTIAL_FACTOR).fillna(1.0)
             if not poi_df.empty:
                 f = f.merge(poi_df, on="Outlet_ID", how="left")
+            
+            # Compute spatial interaction feature
+            cc = f.get("combined_catchment_score", pd.Series(0.0, index=f.index))
+            cd = f.get("competitor_density_gaussian", pd.Series(0.0, index=f.index))
+            f["catchment_to_competitor_ratio"] = (cc / (cd + 1e-9)).fillna(0.0).clip(0.0, 10.0)
+            
             act = monthly[monthly["period_idx"] == p_idx].groupby("Outlet_ID")["monthly_volume"].sum().rename("actual").reset_index()
             f = f.merge(act, on="Outlet_ID", how="inner")
             f = f[f["actual"] > 0]

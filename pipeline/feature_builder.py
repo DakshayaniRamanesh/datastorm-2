@@ -146,6 +146,43 @@ def build_outlet_features(monthly: pd.DataFrame, target_month: int = 1) -> pd.Da
     rolling_median = df_roll_med.groupby(df["Outlet_ID"]).last().reindex(hist_mean_vol.index)
     rolling_maximum = df_roll_max.groupby(df["Outlet_ID"]).last().reindex(hist_mean_vol.index)
 
+    # -----------------------------------------------------------------------
+    # Advanced Feature Engineering Layer (Ratio, Interaction, Group Stats)
+    # -----------------------------------------------------------------------
+    vol_max_to_median_ratio = (hist_max_vol / (hist_median_vol + 1e-9)).clip(0.0, 100.0)
+    vol_p90_to_median_ratio = (hist_p90_vol / (hist_median_vol + 1e-9)).clip(0.0, 50.0)
+    vol_mean_to_median_ratio = (hist_mean_vol / (hist_median_vol + 1e-9)).clip(0.0, 10.0)
+    censoring_to_cv_ratio = (censoring_score / (hist_cv + 1e-9)).clip(0.0, 50.0)
+
+    # Load metadata safely to prevent validation loop leaks
+    from pathlib import Path
+    root_dir = Path(__file__).resolve().parent.parent
+    outlet_file = root_dir / "pipeline" / "silver" / "outlet_master.parquet"
+    if outlet_file.exists():
+        outlet_df = pd.read_parquet(outlet_file).set_index("Outlet_ID")
+        cooler_count = outlet_df["Cooler_Count"].reindex(hist_median_vol.index).fillna(0.0)
+        outlet_type = outlet_df["Outlet_Type"].reindex(hist_median_vol.index).fillna("Grocery")
+        outlet_size = outlet_df["Outlet_Size"].reindex(hist_median_vol.index).fillna("Medium")
+    else:
+        cooler_count = pd.Series(0.0, index=hist_median_vol.index)
+        outlet_type = pd.Series("Grocery", index=hist_median_vol.index)
+        outlet_size = pd.Series("Medium", index=hist_median_vol.index)
+
+    cooler_per_volume = (cooler_count / (hist_median_vol + 1e-9)).clip(0.0, 10.0)
+
+    # Group statistics
+    group_df = pd.DataFrame({
+        "Outlet_Type": outlet_type,
+        "Outlet_Size": outlet_size,
+        "hist_median_vol": hist_median_vol,
+        "hist_max_vol": hist_max_vol,
+        "hist_cv": hist_cv
+    })
+    gp_stats = group_df.groupby(["Outlet_Type", "Outlet_Size"])
+    group_mean_vol = gp_stats["hist_median_vol"].transform("mean").reindex(hist_median_vol.index).fillna(0.0)
+    group_max_vol = gp_stats["hist_max_vol"].transform("mean").reindex(hist_median_vol.index).fillna(0.0)
+    group_cv = gp_stats["hist_cv"].transform("mean").reindex(hist_median_vol.index).fillna(0.0)
+
     return pd.DataFrame({
         "hist_mean_vol": hist_mean_vol,
         "hist_median_vol": hist_median_vol,
@@ -168,5 +205,15 @@ def build_outlet_features(monthly: pd.DataFrame, target_month: int = 1) -> pd.Da
         "dist_rank_mean": dist_rank_mean,
         "primary_dist": primary_dist,
         "rolling_median": rolling_median,
-        "rolling_maximum": rolling_maximum
+        "rolling_maximum": rolling_maximum,
+        # Advanced Features
+        "vol_max_to_median_ratio": vol_max_to_median_ratio,
+        "vol_p90_to_median_ratio": vol_p90_to_median_ratio,
+        "vol_mean_to_median_ratio": vol_mean_to_median_ratio,
+        "censoring_to_cv_ratio": censoring_to_cv_ratio,
+        "cooler_per_volume": cooler_per_volume,
+        "group_mean_vol": group_mean_vol,
+        "group_max_vol": group_max_vol,
+        "group_cv": group_cv
     }).reset_index()
+

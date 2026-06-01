@@ -150,6 +150,11 @@ def build_training_panel_for_window(
         if not poi_df.empty:
             feats = feats.merge(poi_df, on="Outlet_ID", how="left")
             
+        # Compute spatial interaction feature
+        cc = feats.get("combined_catchment_score", pd.Series(0.0, index=feats.index))
+        cd = feats.get("competitor_density_gaussian", pd.Series(0.0, index=feats.index))
+        feats["catchment_to_competitor_ratio"] = (cc / (cd + 1e-9)).fillna(0.0).clip(0.0, 10.0)
+            
         # Actuals
         actual = (
             monthly[monthly["period_idx"] == p_idx]
@@ -293,6 +298,10 @@ def main():
             "regional_peer_performance", "hyperlocal_competition",
             "jan_holiday_count", "high_holiday_month",
             "holiday_poya_count", "holiday_high_effect_count", "holiday_weighted_score",
+            # Advanced Features
+            "vol_max_to_median_ratio", "vol_p90_to_median_ratio", "vol_mean_to_median_ratio",
+            "censoring_to_cv_ratio", "cooler_per_volume", "group_mean_vol", "group_max_vol", "group_cv",
+            "catchment_to_competitor_ratio",
         ]
         feature_cols = [c for c in feature_cols if c in train_panel.columns]
         
@@ -355,6 +364,11 @@ def main():
             if not poi_df.empty:
                 drop_cols = [c for c in ["poi_lat", "poi_lon", "Latitude", "Longitude"] if c in poi_df.columns]
                 val_feats = val_feats.merge(poi_df.drop(columns=drop_cols, errors="ignore"), on="Outlet_ID", how="left")
+                
+            # Compute spatial interaction feature
+            cc = val_feats.get("combined_catchment_score", pd.Series(0.0, index=val_feats.index))
+            cd = val_feats.get("competitor_density_gaussian", pd.Series(0.0, index=val_feats.index))
+            val_feats["catchment_to_competitor_ratio"] = (cc / (cd + 1e-9)).fillna(0.0).clip(0.0, 10.0)
                 
             # peer gap
             peer_p90_val = (

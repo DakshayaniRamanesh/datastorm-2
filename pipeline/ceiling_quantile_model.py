@@ -16,11 +16,13 @@ from __future__ import annotations
 from typing import List, Optional, Sequence
 
 import lightgbm as lgb
+import xgboost as xgb
+from sklearn.ensemble import HistGradientBoostingRegressor
 import numpy as np
 import pandas as pd
 
 CEILING_QUANTILE_ALPHA = 0.90
-CEILING_MODEL_NAME = "LightGBM_Ceiling_Quantile"
+CEILING_MODEL_NAME = "Ensemble_Ceiling_Quantile"
 
 DEFAULT_FEATURE_COLS: List[str] = [
     "hist_mean_vol",
@@ -63,6 +65,59 @@ LGB_CEILING_PARAMS = {
     "random_state": 42,
 }
 
+XGB_CEILING_PARAMS = {
+    "objective": "reg:quantileerror",
+    "quantile_alpha": CEILING_QUANTILE_ALPHA,
+    "n_estimators": 300,
+    "learning_rate": 0.05,
+    "max_depth": 5,
+    "subsample": 0.85,
+    "colsample_bytree": 0.85,
+    "random_state": 42,
+    "n_jobs": -1,
+}
+
+HGB_CEILING_PARAMS = {
+    "loss": "quantile",
+    "quantile": CEILING_QUANTILE_ALPHA,
+    "max_iter": 300,
+    "learning_rate": 0.05,
+    "random_state": 42,
+}
+
+
+class CeilingQuantileEnsemble:
+    """Multi-model ensemble (LightGBM, XGBoost, HistGradientBoosting) for robust quantile regression."""
+    def __init__(self, lgb_params: dict, xgb_params: dict, hgb_params: dict, w_lgb=0.4, w_xgb=0.4, w_hgb=0.2):
+        self.lgb_params = lgb_params
+        self.xgb_params = xgb_params
+        self.hgb_params = hgb_params
+        self.w_lgb = w_lgb
+        self.w_xgb = w_xgb
+        self.w_hgb = w_hgb
+        
+        self.model_lgb = None
+        self.model_xgb = None
+        self.model_hgb = None
+
+    def fit(self, X: pd.DataFrame, y: np.ndarray):
+        self.model_lgb = lgb.LGBMRegressor(**self.lgb_params)
+        self.model_lgb.fit(X, y)
+        
+        self.model_xgb = xgb.XGBRegressor(**self.xgb_params)
+        self.model_xgb.fit(X, y)
+        
+        self.model_hgb = HistGradientBoostingRegressor(**self.hgb_params)
+        self.model_hgb.fit(X, y)
+        return self
+
+    def predict(self, X: pd.DataFrame) -> np.ndarray:
+        p_lgb = self.model_lgb.predict(X)
+        p_xgb = self.model_xgb.predict(X)
+        p_hgb = self.model_hgb.predict(X)
+        return self.w_lgb * p_lgb + self.w_xgb * p_xgb + self.w_hgb * p_hgb
+
+
 
 def ceiling_proxy_array(df: pd.DataFrame, y_obs: Optional[np.ndarray] = None) -> np.ndarray:
     """Soft ceiling reference: max(p90, max history, optional observed month)."""
@@ -104,8 +159,8 @@ def train_ceiling_quantile_model(
     train_df: pd.DataFrame,
     feature_cols: Optional[Sequence[str]] = None,
     y_obs_col: str = "actual_vol",
-) -> tuple[lgb.LGBMRegressor, List[str]]:
-    """Fit quantile regressor on log1p(ceiling proxy)."""
+) -> tuple[CeilingQuantileEnsemble, List[str]]:
+    """Fit quantile regressor ensemble on log1p(ceiling proxy)."""
     cols = resolve_feature_cols(train_df, feature_cols)
     if not cols:
         raise ValueError("No feature columns available for ceiling quantile model.")
@@ -114,13 +169,17 @@ def train_ceiling_quantile_model(
     y = ceiling_target_log(train_df, y_obs=y_obs)
     X = prepare_features(train_df, cols)
 
-    model = lgb.LGBMRegressor(**LGB_CEILING_PARAMS)
+    model = CeilingQuantileEnsemble(
+        lgb_params=LGB_CEILING_PARAMS,
+        xgb_params=XGB_CEILING_PARAMS,
+        hgb_params=HGB_CEILING_PARAMS,
+    )
     model.fit(X, y)
     return model, cols
 
 
 def predict_ceiling_quantile_liters(
-    model: lgb.LGBMRegressor,
+    model: CeilingQuantileEnsemble,
     df: pd.DataFrame,
     feature_cols: List[str],
 ) -> np.ndarray:
