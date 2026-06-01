@@ -11,7 +11,7 @@ output/
 
 # Generated files
 *.db
-*.csv
+
 
 *.pkl
 
