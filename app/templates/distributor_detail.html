@@ -1,0 +1,106 @@
+{% extends 'base.html' %}
+
+{% block title %}Distributor {{ distributor.distributor_id }} — AI ACES{% endblock %}
+
+{% block content %}
+<div class="dash-page-header">
+    <div class="page-breadcrumb"><i class="fa-solid fa-network-wired me-1"></i> / <a href="{{ url_for('distributor.view_distributors') }}">Distributor Intelligence</a> / {{ distributor.distributor_id }}</div>
+    <h1 class="page-title">Distributor {{ distributor.distributor_id }}</h1>
+    <p class="page-subtitle">Outlet performance, budget allocation, and opportunity details for this distributor network.</p>
+</div>
+
+<div class="dash-grid-12 dash-kpi-row mb-4">
+    <div class="dash-col-3">
+        <div class="dash-card kpi-card-v2">
+            <div class="kpi-card-v2-label">Outlets</div>
+            <div class="kpi-card-v2-value">{{ distributor.outlets_count }}</div>
+            <div class="kpi-card-v2-trend"><i class="fa-solid fa-store"></i> Active nodes</div>
+        </div>
+    </div>
+    <div class="dash-col-3">
+        <div class="dash-card kpi-card-v2">
+            <div class="kpi-card-v2-label">Historical Volume</div>
+            <div class="kpi-card-v2-value">{{ "{:,}".format(distributor.hist_volume) }}<span class="kpi-unit"> L</span></div>
+            <div class="kpi-card-v2-trend">Baseline performance</div>
+        </div>
+    </div>
+    <div class="dash-col-3">
+        <div class="dash-card kpi-card-v2">
+            <div class="kpi-card-v2-label">Predicted Potential</div>
+            <div class="kpi-card-v2-value">{{ "{:,}".format(distributor.predicted_potential) }}<span class="kpi-unit"> L</span></div>
+            <div class="kpi-card-v2-trend">AI uplift forecast</div>
+        </div>
+    </div>
+    <div class="dash-col-3">
+        <div class="dash-card kpi-card-v2 kpi-card-v2--alert">
+            <div class="kpi-card-v2-label">Opportunity Gap</div>
+            <div class="kpi-card-v2-value">{{ "{:,}".format(distributor.opportunity_gap) }}<span class="kpi-unit"> L</span></div>
+            <div class="kpi-card-v2-trend">Growth runway</div>
+        </div>
+    </div>
+</div>
+
+<div class="dash-card">
+    <div class="dash-card-header">
+        <h2 class="dash-card-title">Top Outlets in Distributor Network</h2>
+        <span class="badge-glass badge-blue">Sorted by opportunity gap</span>
+    </div>
+    <div class="dash-card-body p-0">
+        <div class="table-responsive">
+            <table class="table-pro mb-0">
+                <thead>
+                    <tr>
+                        <th>Outlet</th>
+                        <th>Type</th>
+                        <th>Size</th>
+                        <th>Potential L</th>
+                        <th>Gap L</th>
+                        <th>Budget</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% if outlets %}
+                        {% for o in outlets %}
+                        <tr>
+                            <td><a href="{{ url_for('outlets.view_outlet_detail', outlet_id=o.Outlet_ID) }}">{{ o.Outlet_ID }}</a></td>
+                            <td>{{ o.Outlet_Type }}</td>
+                            <td>{{ o.Outlet_Size }}</td>
+                            <td>{{ "{:,}".format(o.Maximum_Monthly_Liters) }}</td>
+                            <td>{{ "{:,}".format(o.Maximum_Monthly_Liters - o.hist_median_vol) }}</td>
+                            <td>{% if o.Trade_Spend_LKR > 0 %}LKR {{ "{:,}".format(o.Trade_Spend_LKR) }}{% else %}—{% endif %}</td>
+                        </tr>
+                        {% endfor %}
+                    {% else %}
+                        <tr>
+                            <td colspan="6" class="text-center text-muted py-5">No outlets found for this distributor.</td>
+                        </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+
+{% if total_pages > 1 %}
+<div class="d-flex justify-content-between align-items-center mt-3">
+    <div class="text-muted small">Page {{ page }} of {{ total_pages }}</div>
+    <nav aria-label="Distributor outlet pagination">
+        <ul class="pagination mb-0 gap-2">
+            <li class="page-item {% if page == 1 %}disabled{% endif %}">
+                <a class="btn-glass btn-blue py-1 px-3" href="{{ url_for('distributor.view_distributor_detail', distributor_id=distributor.distributor_id, page=page-1) }}">
+                    <i class="fa-solid fa-chevron-left me-1"></i> Prev
+                </a>
+            </li>
+            <li class="d-flex align-items-center">
+                <span class="badge-glass badge-blue font-weight-bold" style="font-size: 13px;">{{ page }} / {{ total_pages }}</span>
+            </li>
+            <li class="page-item {% if page == total_pages %}disabled{% endif %}">
+                <a class="btn-glass btn-blue py-1 px-3" href="{{ url_for('distributor.view_distributor_detail', distributor_id=distributor.distributor_id, page=page+1) }}">
+                    Next <i class="fa-solid fa-chevron-right ms-1"></i>
+                </a>
+            </li>
+        </ul>
+    </nav>
+</div>
+{% endif %}
+{% endblock %}

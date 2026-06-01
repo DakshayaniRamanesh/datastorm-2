@@ -51,6 +51,11 @@
                     <i class="fa-solid fa-store"></i><span>Outlet Intelligence</span>
                 </a>
             </li>
+            <li class="nav-item {% if active_page == 'distributors' %}active{% endif %}">
+                <a href="{{ url_for('distributor.view_distributors') }}" class="nav-link">
+                    <i class="fa-solid fa-network-wired"></i><span>Distributor Intelligence</span>
+                </a>
+            </li>
             <li class="nav-item {% if active_page == 'optimizer' %}active{% endif %}">
                 <a href="{{ url_for('optimizer.view_optimizer') }}" class="nav-link">
                     <i class="fa-solid fa-wallet"></i><span>Budget Optimizer</span>
@@ -59,6 +64,11 @@
             <li class="nav-item {% if active_page == 'xai' %}active{% endif %}">
                 <a href="{{ url_for('xai.view_xai') }}" class="nav-link">
                     <i class="fa-solid fa-brain"></i><span>Explainable AI</span>
+                </a>
+            </li>
+            <li class="nav-item {% if active_page == 'settings' %}active{% endif %}">
+                <a href="{{ url_for('settings.view_settings') }}" class="nav-link">
+                    <i class="fa-solid fa-gear"></i><span>Settings</span>
                 </a>
             </li>
         </ul>

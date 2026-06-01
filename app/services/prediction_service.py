@@ -124,6 +124,34 @@ class PredictionService:
             r["opportunity_gap"] = round(r["predicted_potential"] - r["hist_volume"], 2)
         return rows
 
+    def get_distributor_summary(self, distributor_id: str) -> Optional[Dict[str, Any]]:
+        """Fetch a synthetic summary for a single distributor."""
+        query = """
+            SELECT
+                o.primary_dist as distributor_id,
+                COUNT(o.Outlet_ID) as outlets_count,
+                AVG(o.censoring_score) as avg_censoring_score,
+                SUM(o.hist_median_vol) as hist_volume,
+                SUM(o.Maximum_Monthly_Liters) as predicted_potential,
+                SUM(COALESCE(a.Trade_Spend_LKR, 0.0)) as total_allocated_spend,
+                SUM(COALESCE(a.Expected_Lift, 0.0)) as total_expected_lift
+            FROM outlets o
+            LEFT JOIN allocations a ON o.Outlet_ID = a.Outlet_ID
+            WHERE o.primary_dist = ?
+            GROUP BY o.primary_dist
+        """
+        rows = self.db.execute_query(query, (distributor_id,))
+        if not rows:
+            return None
+        result = rows[0]
+        result["hist_volume"] = round(result["hist_volume"], 2)
+        result["predicted_potential"] = round(result["predicted_potential"], 2)
+        result["opportunity_gap"] = round(result["predicted_potential"] - result["hist_volume"], 2)
+        result["avg_censoring_score"] = round(result.get("avg_censoring_score") or 0.0, 3)
+        result["total_allocated_spend"] = round(result.get("total_allocated_spend") or 0.0, 2)
+        result["total_expected_lift"] = round(result.get("total_expected_lift") or 0.0, 2)
+        return result
+
     def get_outlets_paginated(
         self,
         page: int = 1,
@@ -161,7 +189,7 @@ class PredictionService:
             "Outlet_ID", "Outlet_Type", "Outlet_Size", "Cooler_Count",
             "hist_median_vol", "Maximum_Monthly_Liters", "censoring_score",
             "combined_catchment_score", "effective_catchment_score", "poi_catchment_score",
-            "market_saturation_index"
+            "market_saturation_index", "opportunity_gap"
         }
         if sort_by not in allowed_sort_cols:
             sort_by = "Outlet_ID"
@@ -183,7 +211,7 @@ class PredictionService:
                    COALESCE((SELECT Revenue_ROI FROM allocations a WHERE a.Outlet_ID = o.Outlet_ID LIMIT 1), 0.0) AS Revenue_ROI
             FROM outlets o
             {where_sql}
-            ORDER BY o.{sort_by} {sort_dir}
+            ORDER BY {"(o.Maximum_Monthly_Liters - o.hist_median_vol)" if sort_by == 'opportunity_gap' else f'o.{sort_by}'} {sort_dir}
             LIMIT ? OFFSET ?
         """
         data_params = params + [per_page, offset]

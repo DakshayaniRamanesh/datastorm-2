@@ -1,0 +1,70 @@
+{% extends 'base.html' %}
+
+{% block title %}Distributor Intelligence — AI ACES{% endblock %}
+
+{% block content %}
+<div class="dash-page-header">
+    <div class="page-breadcrumb"><i class="fa-solid fa-network-wired me-1"></i> / Distributor Intelligence</div>
+    <h1 class="page-title">Distributor Intelligence</h1>
+    <p class="page-subtitle">Track distributor coverage, predicted volume, and gap opportunities at the network level.</p>
+</div>
+
+<div class="dash-grid-12 dash-kpi-row mb-4">
+    <div class="dash-col-4">
+        <div class="dash-card kpi-card-v2">
+            <div class="kpi-card-v2-label">Distributors</div>
+            <div class="kpi-card-v2-value">{{ distributors|length }}</div>
+            <div class="kpi-card-v2-trend"><i class="fa-solid fa-warehouse"></i> Network partners</div>
+        </div>
+    </div>
+    <div class="dash-col-4">
+        <div class="dash-card kpi-card-v2">
+            <div class="kpi-card-v2-label">Total Outlets</div>
+            <div class="kpi-card-v2-value">{{ "{:,}".format(total_outlets) }}</div>
+            <div class="kpi-card-v2-trend"><i class="fa-solid fa-store"></i> Active outlets</div>
+        </div>
+    </div>
+    <div class="dash-col-4">
+        <div class="dash-card kpi-card-v2 kpi-card-v2--alert">
+            <div class="kpi-card-v2-label">Opportunity Gap</div>
+            <div class="kpi-card-v2-value">{{ "{:,}".format(total_gap) }}<span class="kpi-unit"> L</span></div>
+            <div class="kpi-card-v2-trend"><i class="fa-solid fa-arrow-trend-up"></i> Predicted lift</div>
+        </div>
+    </div>
+</div>
+
+<div class="dash-card">
+    <div class="dash-card-header">
+        <h2 class="dash-card-title">Distributor Ranking</h2>
+        <span class="badge-glass badge-blue">Sorted by predicted potential</span>
+    </div>
+    <div class="dash-card-body p-0">
+        <div class="table-responsive">
+            <table class="table-pro mb-0">
+                <thead>
+                    <tr>
+                        <th>Distributor</th>
+                        <th>Outlets</th>
+                        <th>Historical L</th>
+                        <th>Predicted L</th>
+                        <th>Gap L</th>
+                        <th>Detail</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for distributor in distributors %}
+                    <tr>
+                        <td><strong>{{ distributor.distributor_id }}</strong></td>
+                        <td>{{ distributor.outlets_count }}</td>
+                        <td>{{ "{:,}".format(distributor.hist_volume) }}</td>
+                        <td>{{ "{:,}".format(distributor.predicted_potential) }}</td>
+                        <td>{{ "{:,}".format(distributor.opportunity_gap) }}</td>
+                        <td><a href="{{ url_for('distributor.view_distributor_detail', distributor_id=distributor.distributor_id) }}" class="btn btn-outline-primary btn-sm">View</a></td>
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+    </div>
+</div>
+{% endblock %}

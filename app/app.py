@@ -7,7 +7,7 @@ Performs automatic database compilation on startup if needed.
 
 import sys
 import logging
-from flask import Flask, redirect, url_for, send_from_directory, render_template
+from flask import Flask, redirect, url_for, send_from_directory, render_template, session
 from pathlib import Path
 
 # Setup logging
@@ -42,12 +42,17 @@ try:
     from app.routes.outlets import outlets_bp
     from app.routes.optimizer import optimizer_bp
     from app.routes.xai import xai_bp
+    from app.routes.distributor import distributor_bp
+    from app.routes.settings import settings_bp
 except ModuleNotFoundError:
     from services.instances import db
     from routes.dashboard import dashboard_bp
     from routes.outlets import outlets_bp
     from routes.optimizer import optimizer_bp
     from routes.xai import xai_bp
+    from routes.distributor import distributor_bp
+    from routes.settings import settings_bp
+
 
 def create_app() -> Flask:
     """Application factory for the Flask server."""
@@ -66,8 +71,10 @@ def create_app() -> Flask:
     # 1. Register blueprints
     app.register_blueprint(dashboard_bp)
     app.register_blueprint(outlets_bp)
+    app.register_blueprint(distributor_bp)
     app.register_blueprint(optimizer_bp)
     app.register_blueprint(xai_bp)
+    app.register_blueprint(settings_bp)
     
     # Serve generated output assets
     @app.route("/output/<filename>")
@@ -78,7 +85,15 @@ def create_app() -> Flask:
     @app.route("/")
     @app.route("/index")
     def index():
-        return redirect(url_for("dashboard.view_dashboard"))
+        landing_page = session.get("app_settings", {}).get("default_landing_page", "dashboard")
+        target = {
+            "dashboard": "dashboard.view_dashboard",
+            "outlets": "outlets.view_outlets",
+            "distributors": "distributor.view_distributors",
+            "optimizer": "optimizer.view_optimizer",
+            "xai": "xai.view_xai",
+        }.get(landing_page, "dashboard.view_dashboard")
+        return redirect(url_for(target))
         
     @app.errorhandler(404)
     def page_not_found(e):
