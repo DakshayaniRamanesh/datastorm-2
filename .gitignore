@@ -14,7 +14,7 @@ output/
 *.csv
 *.parquet
 *.pkl
-*.geojson
+
 
 # IDE
 .idea/
