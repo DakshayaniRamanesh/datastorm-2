@@ -12,7 +12,7 @@ output/
 # Generated files
 *.db
 *.csv
-*.parquet
+
 *.pkl
 
 
